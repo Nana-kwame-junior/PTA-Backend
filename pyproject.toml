@@ -1,0 +1,19 @@
+[project]
+name = "pta-backend"
+version = "0.1.0"
+description = "FastAPI backend scaffold for PTA."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.6.0",
+    "pytest>=8.0.0"
+]
+
+[project.scripts]
+run = "uvicorn app.main:app --reload"
+
+[build-system]
+requires = ["setuptools>=65.0.0","wheel"]
+build-backend = "setuptools.build_meta"
