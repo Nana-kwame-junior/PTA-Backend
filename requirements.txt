@@ -17,7 +17,7 @@ reportlab==4.1.0
 openpyxl==3.1.2
 pandas==2.2.3
 rapidfuzz==3.9.0
-thefuzz==0.22.0
+thefuzz==0.22.1          # corrected version
 secure-smtplib==0.1.1
 pytest==8.3.2
 pytest-asyncio==0.23.8
