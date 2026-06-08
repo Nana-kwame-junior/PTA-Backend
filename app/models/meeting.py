@@ -1,0 +1,24 @@
+from sqlalchemy import Column, String, DateTime, Text, Enum as SQLEnum
+from app.core.database import Base
+import uuid
+from datetime import datetime
+import enum
+
+class MeetingStatus(str, enum.Enum):
+    SCHEDULED = "SCHEDULED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(255), nullable=False)
+    date = Column(DateTime, nullable=False)
+    time = Column(String(10))
+    venue = Column(String(255))
+    agenda = Column(Text)
+    term = Column(String(20))
+    academic_year = Column(String(20))
+    status = Column(SQLEnum(MeetingStatus), default=MeetingStatus.SCHEDULED)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
