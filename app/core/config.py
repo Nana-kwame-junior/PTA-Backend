@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
 
     # ── Database ───────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/mawuli_pta"
-    database_url_sync: str = "postgresql://postgres:password@localhost:5432/mawuli_pta"
+    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/pta"
+    database_url_sync: str = "postgresql://postgres:password@localhost:5432/pta"
 
     # ── Redis ──────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
 
     # ── JWT ────────────────────────────────────────────────────────
-    jwt_secret: str = "change-this-to-a-256-bit-secret-in-production"
+    jwt_secret: str = "256"
     jwt_algorithm: str = "HS256"
     jwt_access_expire_minutes: int = 15
     jwt_refresh_expire_days: int = 30
