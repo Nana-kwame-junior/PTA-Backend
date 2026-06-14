@@ -8,43 +8,61 @@ from app.models.dues_config import DuesConfig
 from app.models.announcement import Announcement, AnnouncementType
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
+from app.models.class_level import ClassLevel
 
 ACADEMIC_YEAR = "2024/2025"
+
+DEFAULT_CLASS_LEVELS = [
+    {"name": "Nursery", "sequence": 1, "is_terminal": False},
+    {"name": "KG", "sequence": 2, "is_terminal": False},
+    {"name": "Primary 1", "sequence": 3, "is_terminal": False},
+    {"name": "Primary 2", "sequence": 4, "is_terminal": False},
+    {"name": "Primary 3", "sequence": 5, "is_terminal": False},
+    {"name": "Primary 4", "sequence": 6, "is_terminal": False},
+    {"name": "Primary 5", "sequence": 7, "is_terminal": False},
+    {"name": "Primary 6", "sequence": 8, "is_terminal": False},
+    {"name": "JHS 1", "sequence": 9, "is_terminal": False},
+    {"name": "JHS 2", "sequence": 10, "is_terminal": False},
+    {"name": "JHS 3", "sequence": 11, "is_terminal": False},
+    {"name": "Form 1", "sequence": 12, "is_terminal": False},
+    {"name": "Form 2", "sequence": 13, "is_terminal": False},
+    {"name": "Form 3", "sequence": 14, "is_terminal": True},
+]
 
 STUDENTS = [
     {
         "index_number": "MWL/2024/001",
-        "full_name": "Kofi Mensah Ansah",
-        "form": "Form 2",
-        "stream": "Science A",
+        "full_name": "Ama Adjei",
+        "form": "Nursery",
+        "stream": "Red Group",
         "parent_phone_1": "+233241234567",
     },
     {
         "index_number": "MWL/2024/002",
-        "full_name": "Ama Serwaa Ofori",
-        "form": "Form 1",
-        "stream": "General Arts B",
+        "full_name": "Kwame Mensah",
+        "form": "KG",
+        "stream": "Blue Group",
         "parent_phone_1": "+233244567890",
     },
     {
         "index_number": "MWL/2024/003",
-        "full_name": "Kwame Boateng",
-        "form": "Form 3",
-        "stream": "Business C",
+        "full_name": "Akosua Boateng",
+        "form": "Primary 1",
+        "stream": "General",
         "parent_phone_1": "+233201234567",
     },
     {
         "index_number": "MWL/2024/004",
-        "full_name": "Akosua Mensah",
-        "form": "Form 2",
-        "stream": "Science A",
+        "full_name": "Yaw Ofori",
+        "form": "JHS 1",
+        "stream": "Science",
         "parent_phone_1": "+233551234567",
     },
     {
         "index_number": "MWL/2024/005",
-        "full_name": "Yaw Darko",
-        "form": "Form 1",
-        "stream": "Visual Arts A",
+        "full_name": "Efua Darko",
+        "form": "Form 2",
+        "stream": "Arts",
         "parent_phone_1": "+233501234567",
     },
 ]
@@ -87,6 +105,19 @@ def seed():
             print("Academic term: created Term 1 (current)")
         else:
             print("Academic term: Term 1 already exists")
+
+        level_count = 0
+        for row in DEFAULT_CLASS_LEVELS:
+            existing = db.query(ClassLevel).filter(ClassLevel.name == row["name"]).first()
+            if existing:
+                continue
+            db.add(ClassLevel(**row, is_active=True))
+            level_count += 1
+        if level_count:
+            db.commit()
+            print(f"Class levels: created {level_count}")
+        else:
+            print("Class levels: already seeded")
 
         # Students
         student_count = 0

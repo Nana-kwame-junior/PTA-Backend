@@ -5,7 +5,7 @@ from app import models  # noqa: F401 — register SQLAlchemy models before creat
 from app.core.database import engine, Base
 from app.api.v1.routers import (
     auth, students, dues, payments_online, payments_manual,
-    meetings, announcements, sms, reports, attendance, staff, parents, academic
+    meetings, announcements, sms, reports, attendance, staff, parents, academic, class_levels
 )
 
 # Create database tables
@@ -43,6 +43,7 @@ app.include_router(attendance.router, prefix="/api/v1")
 app.include_router(staff.router, prefix="/api/v1")
 app.include_router(parents.router, prefix="/api/v1")
 app.include_router(academic.router, prefix="/api/v1")
+app.include_router(class_levels.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

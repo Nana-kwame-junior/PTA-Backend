@@ -27,9 +27,11 @@ def _serialize_student(student: Student) -> dict:
 
 SAMPLE_CSV = (
     "index_number,full_name,form,stream,parent_phone_1,parent_phone_2\n"
-    "MWL/2024/001,Kofi Mensah Ansah,Form 1,Science A,+233241234567,\n"
-    "MWL/2024/002,Ama Serwaa Ofori,Form 1,General Arts B,+233244567890,\n"
-    "MWL/2024/003,Kwame Boateng,Form 2,Business C,+233201234567,\n"
+    "MWL/2024/001,Ama Adjei,Nursery,Red Group,+233241234567,\n"
+    "MWL/2024/002,Kwame Mensah,KG,Blue Group,+233244567890,\n"
+    "MWL/2024/003,Akosua Boateng,Primary 1,General,+233201234567,\n"
+    "MWL/2024/004,Yaw Ofori,JHS 1,Science,+233551234567,\n"
+    "MWL/2024/005,Efua Darko,Form 2,Arts,+233501234567,\n"
 )
 
 
