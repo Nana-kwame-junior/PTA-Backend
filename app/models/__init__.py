@@ -13,3 +13,4 @@ from .meeting_attendance import MeetingAttendance
 from .announcement import Announcement
 from .sms_log import SmsLog
 from .job_record import JobRecord
+from .expenditure import Expenditure

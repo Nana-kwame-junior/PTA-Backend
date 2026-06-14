@@ -46,17 +46,19 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user_id = payload.get("sub")
     role = payload.get("role")
     if role == "PARENT":
-        # parent is stored in Parent model, not User
         from app.models.parent import Parent
+        from app.models.parent_student_link import ParentStudentLink
         parent = db.query(Parent).filter(Parent.id == user_id).first()
         if not parent:
             raise HTTPException(status_code=401, detail="User not found")
+        links = db.query(ParentStudentLink).filter(ParentStudentLink.parent_id == parent.id).all()
+        matched_ids = [link.student_id for link in links]
         return {
             "id": parent.id,
             "role": "PARENT",
             "phone": parent.phone,
-            "matched_student_ids": payload.get("matched_student_ids", []),
-            "match_status": parent.match_status.value if parent.match_status else "PENDING"
+            "matched_student_ids": matched_ids,
+            "match_status": parent.match_status.value if parent.match_status else "PENDING",
         }
     else:
         user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
@@ -83,3 +85,11 @@ async def require_parent_match(current_user = Depends(get_current_user)):
     if current_user["match_status"] != "MATCHED":
         raise HTTPException(status_code=403, detail="Parent account not matched to any ward")
     return current_user
+
+async def require_registration_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    payload = decode_token(credentials.credentials)
+    if payload.get("role") != "REGISTERING":
+        raise HTTPException(status_code=403, detail="Invalid registration token")
+    return payload

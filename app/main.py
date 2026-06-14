@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from app.core.config import settings
+from app import models  # noqa: F401 — register SQLAlchemy models before create_all
 from app.core.database import engine, Base
 from app.api.v1.routers import (
     auth, students, dues, payments_online, payments_manual,

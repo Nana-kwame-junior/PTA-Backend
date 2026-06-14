@@ -19,9 +19,14 @@ from app.services.paystack import initialize_transaction, verify_webhook_signatu
 from app.services.sms import send_sms
 from app.services.pdf import generate_receipt
 from app.core.config import settings
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse, HTMLResponse
 
 router = APIRouter(prefix="/payments/online", tags=["Online Payments"])
+
+
+def _paystack_email(phone: str) -> str:
+    digits = phone.replace("+", "").replace(" ", "")
+    return f"{digits}@parents.mawulishs.edu.gh"
 
 @router.post("/initiate")
 async def initiate_payment(
@@ -66,11 +71,13 @@ async def initiate_payment(
     
     # Initialize Paystack transaction
     amount_in_pesewas = int(dues_config.amount_ghs * 100)
+    parent_row = db.query(Parent).filter(Parent.id == parent["id"]).first()
+    paystack_email = _paystack_email(parent_row.phone if parent_row else parent.get("phone", ""))
     result = await initialize_transaction(
-        email="parent@example.com",  # In real scenario, parent email would be collected
+        email=paystack_email,
         amount=amount_in_pesewas,
         reference=payment_ref,
-        metadata={"payment_id": str(payment.id), "student_id": str(req.student_id)}
+        metadata={"payment_id": str(payment.id), "student_id": str(req.student_id)},
     )
     
     if not result.get("status"):
@@ -138,6 +145,21 @@ async def paystack_webhook(request: Request, background_tasks: BackgroundTasks, 
             db.commit()
     
     return {"status": "ok"}
+
+
+@router.get("/callback")
+async def paystack_callback(reference: str = None, trxref: str = None):
+    ref = reference or trxref or ""
+    html = f"""
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8"><title>Payment Complete</title></head>
+    <body style="font-family:sans-serif;text-align:center;padding:48px;">
+      <h1>Payment received</h1>
+      <p>Reference: {ref}</p>
+      <p>You can close this page and return to the Mawuli PTA app.</p>
+    </body></html>
+    """
+    return HTMLResponse(content=html)
 
 @router.get("")
 async def list_online_payments(

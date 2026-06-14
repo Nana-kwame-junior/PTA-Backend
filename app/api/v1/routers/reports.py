@@ -11,6 +11,7 @@ from app.models.manual_payment import ManualPayment
 from app.models.student import Student
 from app.models.dues_config import DuesConfig
 from app.models.user import User
+from app.models.expenditure import Expenditure
 from app.schemas.report import ExpenditureCreate, FollowupSmsRequest
 from app.services.report_generator import generate_financial_report_excel
 from fastapi.responses import StreamingResponse, FileResponse
@@ -163,15 +164,58 @@ async def export_financial_report(
 async def create_expenditure(
     req: ExpenditureCreate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    admin=Depends(require_role("ADMIN")),
 ):
-    # Add to expenditure table (model not created yet – create one)
-    # For now, just return
-    return {"success": True, "data": {"message": "Expenditure recorded"}}
+    row = Expenditure(
+        description=req.description,
+        amount_ghs=req.amount_ghs,
+        date=req.date,
+        academic_year=req.academic_year,
+        term=req.term,
+        recorded_by_user_id=admin["id"],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "success": True,
+        "data": {
+            "id": row.id,
+            "description": row.description,
+            "amount_ghs": str(row.amount_ghs),
+            "date": row.date.isoformat(),
+            "academic_year": row.academic_year,
+            "term": row.term,
+        },
+    }
+
 
 @router.get("/expenditures")
 async def list_expenditures(
+    academic_year: Optional[str] = None,
+    term: Optional[str] = None,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    admin=Depends(require_role("ADMIN")),
 ):
-    return {"success": True, "data": {"expenditures": []}}
+    query = db.query(Expenditure)
+    if academic_year:
+        query = query.filter(Expenditure.academic_year == academic_year)
+    if term:
+        query = query.filter(Expenditure.term == term)
+    rows = query.order_by(Expenditure.date.desc()).all()
+    return {
+        "success": True,
+        "data": {
+            "expenditures": [
+                {
+                    "id": row.id,
+                    "description": row.description,
+                    "amount_ghs": str(row.amount_ghs),
+                    "date": row.date.isoformat(),
+                    "academic_year": row.academic_year,
+                    "term": row.term,
+                }
+                for row in rows
+            ]
+        },
+    }

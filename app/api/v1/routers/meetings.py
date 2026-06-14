@@ -159,23 +159,90 @@ async def list_meetings(
     skip: int = 0,
     limit: int = 10,
     status: Optional[str] = None,
-    db: Session = Depends(get_db)
-):   # unchanged, keep existing
-    ...
+    db: Session = Depends(get_db),
+):
+    query = db.query(Meeting)
+    if status:
+        query = query.filter(Meeting.status == status)
+    meetings = query.order_by(Meeting.date.desc()).offset(skip).limit(limit).all()
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": str(m.id),
+                "title": m.title,
+                "date": m.date.isoformat(),
+                "time": m.time,
+                "venue": m.venue,
+                "agenda": m.agenda,
+                "term": m.term,
+                "academic_year": m.academic_year,
+                "status": m.status.value,
+            }
+            for m in meetings
+        ],
+    }
+
 
 @router.get("/upcoming")
 async def upcoming_meetings(
     skip: int = 0,
     limit: int = 10,
-    db: Session = Depends(get_db)
-):  # unchanged
-    ...
+    db: Session = Depends(get_db),
+):
+    now = datetime.utcnow()
+    meetings = (
+        db.query(Meeting)
+        .filter(Meeting.status == MeetingStatus.SCHEDULED, Meeting.date >= now)
+        .order_by(Meeting.date.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": str(m.id),
+                "title": m.title,
+                "date": m.date.isoformat(),
+                "time": m.time,
+                "venue": m.venue,
+                "agenda": m.agenda,
+                "term": m.term,
+                "academic_year": m.academic_year,
+                "status": m.status.value,
+            }
+            for m in meetings
+        ],
+    }
+
 
 @router.get("/{meeting_id}/jobs")
 async def get_meeting_jobs(
     meeting_id: UUID,
     skip: int = 0,
     limit: int = 10,
-    db: Session = Depends(get_db)
-):   # unchanged
-    ...
+    db: Session = Depends(get_db),
+):
+    jobs = (
+        db.query(JobRecord)
+        .filter(JobRecord.reference_id == str(meeting_id))
+        .order_by(JobRecord.scheduled_for.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": job.id,
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "scheduled_for": job.scheduled_for.isoformat() if job.scheduled_for else None,
+                "status": job.status,
+            }
+            for job in jobs
+        ],
+    }
