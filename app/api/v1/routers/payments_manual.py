@@ -4,6 +4,7 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from decimal import Decimal
 import uuid
+import logging
 from typing import Optional
 
 from app.core.database import get_db
@@ -23,8 +24,10 @@ from app.core.config import settings
 from fastapi.responses import StreamingResponse
 from app.workers.lock_tasks import lock_manual_payment
 from app.services.activity_log import log_staff_activity
+from app.services.task_queue import safe_apply_async
 
 router = APIRouter(prefix="/payments/manual", tags=["Manual Payments"])
+logger = logging.getLogger(__name__)
 
 def generate_receipt_number(db: Session) -> str:
     year = datetime.utcnow().year
@@ -39,7 +42,16 @@ async def record_manual_payment(
     db: Session = Depends(get_db),
     staff=Depends(require_permission("payments.record")),
 ):
-    student = db.query(Student).filter(Student.index_number == req.student_index_number).first()
+    if req.student_id:
+        student = db.query(Student).filter(
+            Student.id == str(req.student_id),
+            Student.is_active == True,
+        ).first()
+    else:
+        student = db.query(Student).filter(
+            Student.index_number == req.student_index_number,
+            Student.is_active == True,
+        ).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     
@@ -92,27 +104,31 @@ async def record_manual_payment(
         details=receipt_number,
     )
     
-    # Send SMS to all parent phones
-    for phone in parent_phones:
-        message = f"Cash payment of GH₵{req.amount_ghs} recorded for {student.full_name} ({student.index_number}), {dues_config.term} dues. Receipt: {receipt_number}. Recorded by {user.name if user else 'Staff'}. — Mawuli SHS PTA"
-        background_tasks.add_task(send_sms, phone, message)
-        sms_log = SmsLog(
-            message_type="MANUAL_PAYMENT",
-            recipient_phone=phone,
-            content=message,
-            status="QUEUED"
-        )
-        db.add(sms_log)
-    manual_payment.sms_sent = True
-    manual_payment.sms_sent_at = datetime.utcnow()
-    db.commit()
-    
-    # Schedule lock after 24 hours (using BackgroundTasks as placeholder; use BullMQ in production)
+    # Send SMS to all parent phones (non-blocking; failures must not undo payment)
+    try:
+        for phone in parent_phones:
+            message = f"Cash payment of GH₵{req.amount_ghs} recorded for {student.full_name} ({student.index_number or student.form}), {dues_config.term} dues. Receipt: {receipt_number}. Recorded by {user.name if user else 'Staff'}. — Mawuli SHS PTA"
+            background_tasks.add_task(send_sms, phone, message)
+            sms_log = SmsLog(
+                message_type="MANUAL_PAYMENT",
+                recipient_phone=phone,
+                content=message,
+                status="QUEUED",
+            )
+            db.add(sms_log)
+        manual_payment.sms_sent = bool(parent_phones)
+        if parent_phones:
+            manual_payment.sms_sent_at = datetime.utcnow()
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("SMS logging failed after payment recorded: %s", exc)
+
     lock_time = datetime.utcnow() + timedelta(hours=24)
-    # Enqueue the lock task (worker will lock payment after 24h)
-    lock_manual_payment.apply_async(
+    safe_apply_async(
+        lock_manual_payment,
         args=[str(manual_payment.id)],
-        countdown=24 * 60 * 60
+        countdown=24 * 60 * 60,
     )
     
     return {

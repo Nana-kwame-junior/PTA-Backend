@@ -6,6 +6,7 @@ from app.core.security import (
     create_refresh_token,
     decode_token,
     verify_password,
+    hash_password,
     get_current_user,
     require_registration_token,
 )
@@ -25,12 +26,18 @@ from app.schemas.auth import (
     ParentRegisterRequest,
     SelectCandidateRequest,
     RefreshTokenRequest,
+    ForgotPasswordRequest,
+    ResetPasswordTokenRequest,
+    StaffProfileUpdate,
 )
 import random
 import redis
 import json
+import secrets
 from app.core.config import settings
-from datetime import timedelta
+from datetime import timedelta, datetime
+from app.services.email import send_password_reset_email
+from app.services.activity_log import log_staff_activity
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -385,6 +392,106 @@ async def refresh_token_endpoint(req: RefreshTokenRequest, db: Session = Depends
     return {
         "success": True,
         "data": {"access_token": access_token, "refresh_token": refresh_token},
+    }
+
+
+@router.get("/web/me")
+async def web_me(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user["role"] not in ("ADMIN", "FINANCIAL_STAFF"):
+        raise HTTPException(status_code=403, detail="Staff only")
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "success": True,
+        "data": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role.value,
+            "is_first_login": user.is_first_login,
+            "permissions": resolve_user_permissions(user),
+        },
+    }
+
+
+@router.patch("/web/me")
+async def update_web_me(
+    req: StaffProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user["role"] not in ("ADMIN", "FINANCIAL_STAFF"):
+        raise HTTPException(status_code=403, detail="Staff only")
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if req.name is not None:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        user.name = name
+    if req.email is not None:
+        existing = db.query(User).filter(User.email == req.email, User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already in use")
+        user.email = req.email
+    db.commit()
+    log_staff_activity(
+        db,
+        current_user,
+        page_label="Settings",
+        action_label="Updated staff profile",
+        details=user.email,
+    )
+    return {
+        "success": True,
+        "data": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role.value,
+            "is_first_login": user.is_first_login,
+            "permissions": resolve_user_permissions(user),
+        },
+    }
+
+
+@router.post("/web/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == req.email, User.is_active == True).first()
+    if user:
+        token = secrets.token_urlsafe(32)
+        user.reset_token = token
+        user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+        db.commit()
+        send_password_reset_email(user.email, user.name, token)
+    return {
+        "success": True,
+        "data": {
+            "message": "If that email is registered, a password reset link has been sent.",
+        },
+    }
+
+
+@router.post("/web/reset-password")
+async def reset_password_with_token(req: ResetPasswordTokenRequest, db: Session = Depends(get_db)):
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    user = db.query(User).filter(
+        User.reset_token == req.token,
+        User.is_active == True,
+    ).first()
+    if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    user.hashed_password = hash_password(req.new_password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    user.is_first_login = False
+    db.commit()
+    return {
+        "success": True,
+        "data": {"message": "Password updated. You can sign in now."},
     }
 
 

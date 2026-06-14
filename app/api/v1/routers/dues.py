@@ -11,6 +11,7 @@ from app.models.academic import AcademicTerm
 from app.schemas.dues import DuesConfigCreate, DuesConfigUpdate
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_dues_reminder
+from app.services.task_queue import safe_apply_async
 
 router = APIRouter(prefix="/dues", tags=["Dues Configuration"])
 
@@ -46,9 +47,9 @@ async def create_dues_config(
     db.commit()
     db.refresh(dues)
 
-    send_dues_reminder.apply_async(args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
-    send_dues_reminder.apply_async(args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-    send_dues_reminder.apply_async(args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
+    safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
+    safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
+    safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
 
     log_staff_activity(
         db,
@@ -107,9 +108,9 @@ async def update_dues_config(
         setattr(dues, key, value)
     db.commit()
     if req.due_date and req.due_date != old_due_date:
-        send_dues_reminder.apply_async(args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
-        send_dues_reminder.apply_async(args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-        send_dues_reminder.apply_async(args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
+        safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
+        safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
+        safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
     log_staff_activity(
         db,
         staff,

@@ -15,6 +15,7 @@ from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel, Att
 from app.services.sms import send_sms
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_meeting_reminder
+from app.services.task_queue import safe_apply_async
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
 
@@ -44,20 +45,23 @@ async def create_meeting(
 
     # Schedule Celery tasks
     # D7
-    send_meeting_reminder.apply_async(
+    safe_apply_async(
+        send_meeting_reminder,
         args=[str(meeting.id), "D7"],
-        eta=meeting.date - timedelta(days=7)
+        eta=meeting.date - timedelta(days=7),
     )
     # D3
-    send_meeting_reminder.apply_async(
+    safe_apply_async(
+        send_meeting_reminder,
         args=[str(meeting.id), "D3"],
-        eta=meeting.date - timedelta(days=3)
+        eta=meeting.date - timedelta(days=3),
     )
     # D0 (morning of meeting)
     eta_d0 = meeting.date.replace(hour=7, minute=0, second=0)
-    send_meeting_reminder.apply_async(
+    safe_apply_async(
+        send_meeting_reminder,
         args=[str(meeting.id), "D0"],
-        eta=eta_d0
+        eta=eta_d0,
     )
 
     # Store job records (optional but good for monitoring)
@@ -100,18 +104,21 @@ async def update_meeting(
         # Cancel old jobs and reschedule
         cancel_meeting_jobs(str(meeting_id), db)
         # Schedule new jobs (same as create)
-        send_meeting_reminder.apply_async(
+        safe_apply_async(
+            send_meeting_reminder,
             args=[str(meeting.id), "D7"],
-            eta=meeting.date - timedelta(days=7)
+            eta=meeting.date - timedelta(days=7),
         )
-        send_meeting_reminder.apply_async(
+        safe_apply_async(
+            send_meeting_reminder,
             args=[str(meeting.id), "D3"],
-            eta=meeting.date - timedelta(days=3)
+            eta=meeting.date - timedelta(days=3),
         )
         eta_d0 = meeting.date.replace(hour=7, minute=0, second=0)
-        send_meeting_reminder.apply_async(
+        safe_apply_async(
+            send_meeting_reminder,
             args=[str(meeting.id), "D0"],
-            eta=eta_d0
+            eta=eta_d0,
         )
         # Send reschedule SMS (background)
         from app.services.sms import send_sms

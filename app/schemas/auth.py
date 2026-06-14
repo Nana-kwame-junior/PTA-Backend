@@ -28,3 +28,14 @@ class SelectCandidateRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordTokenRequest(BaseModel):
+    token: str
+    new_password: str
+
+class StaffProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None

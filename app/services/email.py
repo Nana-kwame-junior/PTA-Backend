@@ -117,3 +117,45 @@ Use your email address and the temporary password above to log in. You will be a
 </html>
 """
     return _send_email(to_email, subject, html_body, text_body)
+
+
+def send_password_reset_email(to_email: str, user_name: str, reset_token: str) -> bool:
+    reset_url = f"{settings.dashboard_url.rstrip('/')}/reset-password?token={reset_token}"
+    subject = "Reset your Mawuli PTA staff password"
+
+    text_body = f"""Hello {user_name},
+
+We received a request to reset your staff portal password.
+
+Open this link to choose a new password (valid for 1 hour):
+{reset_url}
+
+If you did not request this, you can ignore this email.
+
+— Mawuli SHS PTA
+"""
+
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="100%" style="max-width:520px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,0.08);">
+        <tr><td style="background:linear-gradient(135deg,#0d9488,#0f766e);padding:28px 32px;color:#ffffff;">
+          <div style="font-size:13px;opacity:0.9;">Mawuli SHS PTA</div>
+          <div style="font-size:24px;font-weight:700;margin-top:6px;">Password reset</div>
+        </td></tr>
+        <tr><td style="padding:32px;color:#334155;line-height:1.6;">
+          <p style="margin:0 0 16px;">Hello <strong>{user_name}</strong>,</p>
+          <p style="margin:0 0 24px;">Use the button below to set a new password for your staff account. This link expires in one hour.</p>
+          <a href="{reset_url}" style="display:inline-block;background:#f97316;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:999px;font-weight:700;">Reset password</a>
+          <p style="margin:24px 0 0;font-size:13px;color:#64748b;">If you did not request this, ignore this email.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+"""
+    return _send_email(to_email, subject, html_body, text_body)
