@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app import models  # noqa: F401 — register SQLAlchemy models before create_all
 from app.core.database import engine, Base
@@ -14,6 +15,18 @@ app = FastAPI(
     title=settings.project_name,
     version=settings.version,
     description=settings.description,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        origin.strip()
+        for origin in settings.cors_origins.split(",")
+        if origin.strip()
+    ],
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include routers

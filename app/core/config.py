@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     use_credentials: Optional[bool] = False
 
     # ── CORS (optional) ────────────────────────────────────────────
-    cors_origins: str = "http://localhost:3000,http://localhost:3001"
+    cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:3000"
     cors_allow_credentials: bool = True
 
     # ── File Storage ───────────────────────────────────────────────
