@@ -1,7 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Optional
 from decimal import Decimal
+
 
 class DuesConfigCreate(BaseModel):
     academic_year: str
@@ -10,6 +11,13 @@ class DuesConfigCreate(BaseModel):
     due_date: datetime
     grace_period_days: int = 7
     late_fee_ghs: Decimal = 0
+
+    @field_validator("due_date")
+    @classmethod
+    def due_date_required(cls, value: datetime) -> datetime:
+        if value is None:
+            raise ValueError("Due date is required")
+        return value
 
 class DuesConfigUpdate(BaseModel):
     amount_ghs: Optional[Decimal] = None

@@ -1,32 +1,89 @@
+import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from typing import ContextManager
+
 from app.core.config import settings
 
-async def send_temporary_password_email(to_email: str, temp_password: str, user_name: str):
-    subject = "Your Mawuli PTA Staff Account"
-    body = f"""
-    Hello {user_name},
+logger = logging.getLogger(__name__)
 
-    Your staff account for PTA Management System has been created.
 
-    Use the following temporary password to log in:
-    {temp_password}
+def _smtp_client() -> ContextManager[smtplib.SMTP]:
+    host = settings.resolved_smtp_host
+    port = settings.resolved_smtp_port
 
-    You will be required to change your password after first login.
+    if settings.smtp_use_ssl:
+        return smtplib.SMTP_SSL(host, port, timeout=30)
 
-    Login URL: {settings.api_base_url}/login
+    server = smtplib.SMTP(host, port, timeout=30)
+    if settings.smtp_use_starttls:
+        server.starttls()
+    return server
 
-    ---
-    Mawuli SHS PTA
+
+def send_temporary_password_email(to_email: str, temp_password: str, user_name: str) -> bool:
     """
+    Send staff invitation / password reset email.
+    Returns True when sent, False when skipped or failed. Never raises.
+    """
+    username = settings.resolved_smtp_user
+    password = settings.resolved_smtp_pass
+
+    if not username or not password:
+        logger.warning(
+            "Email not configured (set MAIL_USERNAME + MAIL_PASSWORD or SMTP_USER + SMTP_PASS) — skipped %s",
+            to_email,
+        )
+        return False
+
+    from_addr = settings.smtp_from_address
+    from_header = (
+        f"{settings.mail_from_name} <{from_addr}>"
+        if settings.mail_from_name
+        else from_addr
+    )
+
+    subject = "Your Mawuli PTA Staff Account"
+    body = f"""Hello {user_name},
+
+Your staff account for the PTA Management System has been updated.
+
+Use this temporary password to log in:
+{temp_password}
+
+You must change your password after signing in.
+
+Login: {settings.api_base_url}/login
+
+— Mawuli SHS PTA
+"""
+
     msg = MIMEMultipart()
-    msg["From"] = settings.smtp_user
+    msg["From"] = from_header
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-        server.starttls()
-        server.login(settings.smtp_user, settings.smtp_pass)
-        server.send_message(msg)
+    try:
+        with _smtp_client() as server:
+            server.login(username, password)
+            server.send_message(msg)
+        logger.info(
+            "Staff email sent to %s via %s:%s (ssl=%s)",
+            to_email,
+            settings.resolved_smtp_host,
+            settings.resolved_smtp_port,
+            settings.smtp_use_ssl,
+        )
+        return True
+    except Exception as exc:
+        logger.exception(
+            "Failed to send staff email to %s (%s:%s ssl=%s): %s",
+            to_email,
+            settings.resolved_smtp_host,
+            settings.resolved_smtp_port,
+            settings.smtp_use_ssl,
+            exc,
+        )
+        return False
