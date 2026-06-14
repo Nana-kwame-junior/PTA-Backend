@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api/v1"
     api_base_url: str = "http://localhost:8000"
+    dashboard_url: str = "http://localhost:5173"
 
     # ── Database ───────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/pta"
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
     # ── JWT ────────────────────────────────────────────────────────
     jwt_secret: str = "256"
     jwt_algorithm: str = "HS256"
-    jwt_access_expire_minutes: int = 15
+    jwt_access_expire_minutes: int = 480
     jwt_refresh_expire_days: int = 30
     jwt_registration_expire_minutes: int = 10
     jwt_selection_expire_minutes: int = 5

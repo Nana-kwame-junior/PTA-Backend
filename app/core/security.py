@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
+from app.services.permissions import resolve_user_permissions
 
 security = HTTPBearer()
 
@@ -71,7 +72,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "role": user.role.value,
             "email": user.email,
             "name": user.name,
-            "is_first_login": user.is_first_login
+            "is_first_login": user.is_first_login,
+            "permissions": resolve_user_permissions(user),
         }
 
 def require_role(required_role: str):
@@ -81,6 +83,21 @@ def require_role(required_role: str):
             return current_user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return role_dependency
+
+
+def require_permission(required_permission: str):
+    """Staff route guard — admin always allowed; financial staff need assigned permission."""
+    async def permission_dependency(current_user = Depends(get_current_user)):
+        role = current_user["role"]
+        if role == "ADMIN":
+            return current_user
+        if role != "FINANCIAL_STAFF":
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        permissions = current_user.get("permissions") or []
+        if required_permission not in permissions:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return permission_dependency
 
 async def require_parent_match(current_user = Depends(get_current_user)):
     if current_user["role"] != "PARENT":

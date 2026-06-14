@@ -4,7 +4,7 @@ from uuid import UUID
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_permission
 from app.models.parent import Parent, MatchStatus
 from app.models.pending_match import PendingMatch
 from app.models.student import Student
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/admin/pending-matches", tags=["Parent Matching"])
 @router.get("")
 async def list_pending_matches(
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("parents")),
 ):
     pending = db.query(PendingMatch).filter(PendingMatch.status == "PENDING").all()
     result = []
@@ -45,7 +45,7 @@ async def approve_pending_match(
     req: dict,  # {"student_id": "..."}
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("parents")),
 ):
     pending = db.query(PendingMatch).filter(PendingMatch.id == str(pending_id)).first()
     if not pending:
@@ -85,7 +85,7 @@ async def reject_pending_match(
     req: dict,  # {"reason": "..."}
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("parents")),
 ):
     pending = db.query(PendingMatch).filter(PendingMatch.id == str(pending_id)).first()
     if not pending:

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Numeric, Integer
+from sqlalchemy import Column, String, DateTime, Numeric, Integer, Boolean
 from app.core.database import Base
 import uuid
 from datetime import datetime
@@ -12,5 +12,6 @@ class DuesConfig(Base):
     due_date = Column(DateTime, nullable=False)
     grace_period_days = Column(Integer, default=7)
     late_fee_ghs = Column(Numeric(10,2), default=0)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

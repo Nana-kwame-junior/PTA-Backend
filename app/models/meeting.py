@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Text, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, Text, Enum as SQLEnum, Boolean
 from app.core.database import Base
 import uuid
 from datetime import datetime
@@ -20,5 +20,6 @@ class Meeting(Base):
     term = Column(String(20))
     academic_year = Column(String(20))
     status = Column(SQLEnum(MeetingStatus), default=MeetingStatus.SCHEDULED)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

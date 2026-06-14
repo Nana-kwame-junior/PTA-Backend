@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.api.v1.dependencies import require_role
+from app.api.v1.dependencies import require_permission
 from app.models.student import Student
 from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest
 from app.services.student_validation import validate_student_fields, normalize_gender
+from app.services.activity_log import log_staff_activity
 import csv
 import io
 from uuid import UUID
@@ -38,7 +39,7 @@ SAMPLE_CSV = (
 
 
 @router.get("/import/sample")
-async def download_import_sample(admin=Depends(require_role("ADMIN"))):
+async def download_import_sample(staff=Depends(require_permission("students"))):
     return StreamingResponse(
         iter([SAMPLE_CSV]),
         media_type="text/csv",
@@ -51,7 +52,7 @@ async def import_students(
     file: UploadFile = File(...),
     academic_year: str = Query(...),
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("students")),
 ):
     contents = await file.read()
     csv_reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
@@ -109,7 +110,7 @@ async def list_students(
     academic_year: str = None,
     is_active: bool = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("FINANCIAL_STAFF")),
+    current_user=Depends(require_permission("students")),
 ):
     query = db.query(Student)
     if search:
@@ -145,7 +146,7 @@ async def list_students(
 async def get_student_by_index(
     index_number: str,
     db: Session = Depends(get_db),
-    staff=Depends(require_role("FINANCIAL_STAFF")),
+    staff=Depends(require_permission("students")),
 ):
     student = db.query(Student).filter(Student.index_number == index_number).first()
     if not student:
@@ -157,7 +158,7 @@ async def get_student_by_index(
 async def create_student(
     data: StudentCreate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("students")),
 ):
     try:
         idx, strm, gender = validate_student_fields(
@@ -183,6 +184,13 @@ async def create_student(
         db.rollback()
         raise HTTPException(status_code=409, detail="Student record already exists") from e
     db.refresh(student)
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Students",
+        action_label=f"Added student {student.full_name}",
+        details=student.index_number or student.form,
+    )
     return {"success": True, "data": _serialize_student(student)}
 
 
@@ -191,7 +199,7 @@ async def update_student(
     student_id: UUID,
     data: StudentUpdate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("students")),
 ):
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
@@ -211,6 +219,13 @@ async def update_student(
     for key, value in payload.items():
         setattr(student, key, value)
     db.commit()
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Students",
+        action_label=f"Updated student {student.full_name}",
+        details=student.index_number or student.form,
+    )
     return {"success": True, "data": _serialize_student(student)}
 
 
@@ -218,11 +233,19 @@ async def update_student(
 async def delete_student(
     student_id: UUID,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("students")),
 ):
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404)
+    name = student.full_name
     student.is_active = False
     db.commit()
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Students",
+        action_label=f"Removed student {name}",
+        details="Soft deleted — record kept inactive",
+    )
     return {"success": True, "data": {"message": "Student deactivated"}}

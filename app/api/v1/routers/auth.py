@@ -13,6 +13,7 @@ from app.services.sms import send_sms
 from app.services.matching import find_matches
 from app.models.parent import Parent, MatchStatus
 from app.models.user import User
+from app.services.permissions import resolve_user_permissions
 from app.models.student import Student
 from app.models.pending_match import PendingMatch
 from app.models.parent_student_link import ParentStudentLink
@@ -125,6 +126,7 @@ async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
                 "email": user.email,
                 "role": user.role.value,
                 "is_first_login": user.is_first_login,
+                "permissions": resolve_user_permissions(user),
             },
         },
     }

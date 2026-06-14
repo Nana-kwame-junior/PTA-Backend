@@ -10,6 +10,7 @@ from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.announcement import AnnouncementCreate
 from app.services.sms import send_sms
+from app.services.activity_log import log_staff_activity
 
 router = APIRouter(prefix="/announcements", tags=["Announcements"])
 
@@ -18,7 +19,7 @@ async def create_announcement(
     req: AnnouncementCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    admin=Depends(require_role("ADMIN")),
 ):
     announcement = Announcement(
         title=req.title,
@@ -48,6 +49,14 @@ async def create_announcement(
             db.add(sms_log)
         db.commit()
         sms_dispatched = True
+
+    log_staff_activity(
+        db,
+        admin,
+        page_label="Announcements",
+        action_label=f"Published announcement: {announcement.title}",
+        details=announcement.type.value,
+    )
     
     return {
         "success": True,
@@ -69,7 +78,7 @@ async def list_announcements(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    query = db.query(Announcement)
+    query = db.query(Announcement).filter(Announcement.is_active == True)
     if type:
         query = query.filter(Announcement.type == type)
     # Parent sees only published; admin sees all
@@ -84,7 +93,7 @@ async def update_announcement(
     announcement_id: UUID,
     req: dict,  # title, body
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    admin=Depends(require_role("ADMIN")),
 ):
     announcement = db.query(Announcement).filter(Announcement.id == str(announcement_id)).first()
     if not announcement:
@@ -94,4 +103,32 @@ async def update_announcement(
     if "body" in req:
         announcement.body = req["body"]
     db.commit()
+    log_staff_activity(
+        db,
+        admin,
+        page_label="Announcements",
+        action_label=f"Updated announcement: {announcement.title}",
+    )
     return {"success": True, "data": {"id": str(announcement_id), "updated": True}}
+
+
+@router.delete("/{announcement_id}")
+async def deactivate_announcement(
+    announcement_id: UUID,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role("ADMIN")),
+):
+    announcement = db.query(Announcement).filter(Announcement.id == str(announcement_id)).first()
+    if not announcement:
+        raise HTTPException(status_code=404)
+    title = announcement.title
+    announcement.is_active = False
+    db.commit()
+    log_staff_activity(
+        db,
+        admin,
+        page_label="Announcements",
+        action_label=f"Removed announcement: {title}",
+        details="Soft deleted",
+    )
+    return {"success": True, "data": {"message": "Announcement removed"}}

@@ -16,3 +16,4 @@ from .job_record import JobRecord
 from .expenditure import Expenditure
 from .academic import AcademicYear, AcademicTerm
 from .class_level import ClassLevel
+from .staff_activity import StaffActivityLog

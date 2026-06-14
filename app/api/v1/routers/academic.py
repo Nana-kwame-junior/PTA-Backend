@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_permission
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
 from app.services.promotion import promote_students_for_year
 
@@ -40,7 +40,7 @@ def _serialize_term(row: AcademicTerm) -> dict:
 async def create_academic_year(
     body: dict,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     label = (body.get("label") or "").strip()
     if not label:
@@ -58,7 +58,7 @@ async def create_academic_year(
 @router.get("/years")
 async def list_academic_years(
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     rows = db.query(AcademicYear).order_by(AcademicYear.label.desc()).all()
     return {"success": True, "data": {"years": [_serialize_year(r) for r in rows]}}
@@ -69,7 +69,7 @@ async def create_academic_term(
     year_id: UUID,
     body: dict,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     year = db.query(AcademicYear).filter(AcademicYear.id == str(year_id)).first()
     if not year:
@@ -111,7 +111,7 @@ async def create_academic_term(
 async def list_terms_for_year(
     year_id: UUID,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     rows = (
         db.query(AcademicTerm)
@@ -126,7 +126,7 @@ async def list_terms_for_year(
 async def list_all_terms(
     academic_year: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("FINANCIAL_STAFF")),
+    current_user=Depends(require_permission("academic")),
 ):
     query = db.query(AcademicTerm)
     if academic_year:
@@ -147,7 +147,7 @@ async def get_current_term(db: Session = Depends(get_db)):
 async def activate_term(
     term_id: UUID,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     term = db.query(AcademicTerm).filter(AcademicTerm.id == str(term_id)).first()
     if not term:
@@ -168,7 +168,7 @@ async def close_term(
     term_id: UUID,
     body: dict | None = None,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    admin=Depends(require_permission("academic")),
 ):
     term = db.query(AcademicTerm).filter(AcademicTerm.id == str(term_id)).first()
     if not term:

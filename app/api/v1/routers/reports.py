@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import datetime
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_permission
 from app.models.payment import Payment, PaymentStatus
 from app.models.manual_payment import ManualPayment
 from app.models.student import Student
@@ -37,7 +37,7 @@ async def financial_report(
     academic_year: str,
     term: str,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("reports")),
 ):
     dues = (
         db.query(DuesConfig)
@@ -232,7 +232,7 @@ async def list_defaulters(
     stream: Optional[str] = None,
     format: str = "json",
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("reports")),
 ):
     dues = (
         db.query(DuesConfig)
@@ -283,7 +283,7 @@ async def export_financial_report(
     term: str,
     format: str = "excel",
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("reports")),
 ):
     excel_data = generate_financial_report_excel(db, academic_year, term)
     return StreamingResponse(
@@ -297,7 +297,7 @@ async def export_financial_report(
 async def create_expenditure(
     req: ExpenditureCreate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("reports")),
 ):
     row = Expenditure(
         description=req.description,
@@ -328,7 +328,7 @@ async def list_expenditures(
     academic_year: Optional[str] = None,
     term: Optional[str] = None,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("reports")),
 ):
     query = db.query(Expenditure)
     if academic_year:

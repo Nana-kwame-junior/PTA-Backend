@@ -7,7 +7,7 @@ from decimal import Decimal
 from datetime import datetime
 
 from app.core.database import get_db
-from app.core.security import require_parent_match, get_current_user, require_role
+from app.core.security import require_parent_match, get_current_user, require_permission
 from app.models.payment import Payment, PaymentStatus
 from app.models.student import Student
 from app.models.parent import Parent
@@ -261,7 +261,7 @@ async def list_online_payments(
     page: int = 1,
     limit: int = 50,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("payments.online")),
 ):
     query = db.query(Payment)
     if student_id:

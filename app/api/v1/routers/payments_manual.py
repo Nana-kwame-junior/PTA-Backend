@@ -7,7 +7,7 @@ import uuid
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import require_role, get_current_user
+from app.core.security import require_role, require_permission, get_current_user
 from app.models.manual_payment import ManualPayment, ManualPaymentMode
 from app.models.manual_amendment import ManualAmendment
 from app.models.student import Student
@@ -22,6 +22,7 @@ from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse
 from app.workers.lock_tasks import lock_manual_payment
+from app.services.activity_log import log_staff_activity
 
 router = APIRouter(prefix="/payments/manual", tags=["Manual Payments"])
 
@@ -36,13 +37,16 @@ async def record_manual_payment(
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    staff=Depends(require_role("FINANCIAL_STAFF"))
+    staff=Depends(require_permission("payments.record")),
 ):
     student = db.query(Student).filter(Student.index_number == req.student_index_number).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     
-    dues_config = db.query(DuesConfig).filter(DuesConfig.id == str(req.dues_config_id)).first()
+    dues_config = db.query(DuesConfig).filter(
+        DuesConfig.id == str(req.dues_config_id),
+        DuesConfig.is_active == True,
+    ).first()
     if not dues_config:
         raise HTTPException(status_code=404, detail="Dues configuration not found")
     
@@ -80,6 +84,13 @@ async def record_manual_payment(
     db.add(manual_payment)
     db.commit()
     db.refresh(manual_payment)
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Record Payment",
+        action_label=f"Recorded GH₵{req.amount_ghs} for {student.full_name}",
+        details=receipt_number,
+    )
     
     # Send SMS to all parent phones
     for phone in parent_phones:
@@ -211,7 +222,7 @@ async def list_manual_payments(
     page: int = 1,
     limit: int = 50,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("payments.history")),
 ):
     query = db.query(ManualPayment)
     if student_id:
@@ -264,7 +275,7 @@ async def manual_payment_audit_log(
 async def download_manual_receipt(
     payment_id: UUID,
     db: Session = Depends(get_db),
-    staff=Depends(require_role("FINANCIAL_STAFF"))
+    staff=Depends(require_permission("payments.history")),
 ):
     payment = db.query(ManualPayment).filter(ManualPayment.id == str(payment_id)).first()
     if not payment:

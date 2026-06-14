@@ -6,13 +6,14 @@ from typing import Optional
 import json
 
 from app.core.database import get_db
-from app.core.security import require_role, require_parent_match
+from app.core.security import require_permission
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.job_record import JobRecord
 from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel, AttendanceRecord
 from app.services.sms import send_sms
+from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_meeting_reminder
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
@@ -26,12 +27,20 @@ def cancel_meeting_jobs(meeting_id: str, db: Session):
 async def create_meeting(
     req: MeetingCreate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("meetings")),
 ):
     meeting = Meeting(**req.dict())
     db.add(meeting)
     db.commit()
     db.refresh(meeting)
+
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Meetings",
+        action_label=f"Scheduled meeting: {meeting.title}",
+        details=meeting.date.strftime("%d %b %Y"),
+    )
 
     # Schedule Celery tasks
     # D7
@@ -77,7 +86,7 @@ async def update_meeting(
     meeting_id: UUID,
     req: MeetingUpdate,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("meetings")),
 ):
     meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
     if not meeting:
@@ -113,6 +122,12 @@ async def update_meeting(
             # In production, use background task (e.g., celery)
             pass  # We'll leave SMS sending to the caller or use a separate task
 
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Meetings",
+        action_label=f"Updated meeting: {meeting.title}",
+    )
     return {"success": True, "data": {"id": str(meeting_id), "updated": True}}
 
 @router.post("/{meeting_id}/cancel")
@@ -120,7 +135,7 @@ async def cancel_meeting(
     meeting_id: UUID,
     req: MeetingCancel,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("meetings")),
 ):
     meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
     if not meeting:
@@ -128,6 +143,13 @@ async def cancel_meeting(
     meeting.status = MeetingStatus.CANCELLED
     db.commit()
     cancel_meeting_jobs(str(meeting_id), db)
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Meetings",
+        action_label=f"Cancelled meeting: {meeting.title}",
+        details=req.reason,
+    )
     # Send cancellation SMS (background)
     parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
     phones = [p.phone for p in parents if p.phone]
@@ -141,7 +163,7 @@ async def cancel_meeting(
 async def send_agenda_sms(
     meeting_id: UUID,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    staff=Depends(require_permission("meetings")),
 ):
     meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
     if not meeting:
@@ -154,6 +176,30 @@ async def send_agenda_sms(
         pass
     return {"success": True, "data": {"recipients_count": len(phones), "batches_queued": (len(phones)+99)//100}}
 
+
+@router.delete("/{meeting_id}")
+async def deactivate_meeting(
+    meeting_id: UUID,
+    db: Session = Depends(get_db),
+    staff=Depends(require_permission("meetings")),
+):
+    meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
+    if not meeting:
+        raise HTTPException(status_code=404)
+    title = meeting.title
+    meeting.is_active = False
+    db.commit()
+    cancel_meeting_jobs(str(meeting_id), db)
+    log_staff_activity(
+        db,
+        staff,
+        page_label="Meetings",
+        action_label=f"Removed meeting: {title}",
+        details="Soft deleted — hidden from lists",
+    )
+    return {"success": True, "data": {"message": "Meeting removed"}}
+
+
 @router.get("")
 async def list_meetings(
     skip: int = 0,
@@ -161,7 +207,7 @@ async def list_meetings(
     status: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    query = db.query(Meeting)
+    query = db.query(Meeting).filter(Meeting.is_active == True)
     if status:
         query = query.filter(Meeting.status == status)
     meetings = query.order_by(Meeting.date.desc()).offset(skip).limit(limit).all()
@@ -193,7 +239,11 @@ async def upcoming_meetings(
     now = datetime.utcnow()
     meetings = (
         db.query(Meeting)
-        .filter(Meeting.status == MeetingStatus.SCHEDULED, Meeting.date >= now)
+        .filter(
+            Meeting.is_active == True,
+            Meeting.status == MeetingStatus.SCHEDULED,
+            Meeting.date >= now,
+        )
         .order_by(Meeting.date.asc())
         .offset(skip)
         .limit(limit)

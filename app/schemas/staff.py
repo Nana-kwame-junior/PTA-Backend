@@ -9,3 +9,4 @@ class StaffCreate(BaseModel):
     name: str
     email: EmailStr
     role: StaffRole = StaffRole.FINANCIAL_STAFF
+    permissions: list[str] | None = None

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum
+from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, JSON
 from app.core.database import Base
 import uuid
 from datetime import datetime
@@ -16,7 +16,8 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False)
     is_active = Column(Boolean, default=True)
-    is_first_login = Column(Boolean, default=True)   # force password change on first login
+    is_first_login = Column(Boolean, default=True)
+    permissions = Column(JSON, nullable=True)
     totp_secret = Column(String(255), nullable=True)  # optional 2FA, not used yet
     reset_token = Column(String(255), nullable=True)  # password reset token
     reset_token_expires = Column(DateTime, nullable=True)
