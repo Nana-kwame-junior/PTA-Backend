@@ -103,7 +103,7 @@ async def import_students(
 @router.get("")
 async def list_students(
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     search: str = None,
     form: str = None,
     stream: str = None,

@@ -45,7 +45,7 @@ async def list_assignable_permissions(admin=Depends(require_role("ADMIN"))):
 @router.get("/activity")
 async def list_activity_logs(
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     db: Session = Depends(get_db),
     admin=Depends(require_role("ADMIN")),
 ):

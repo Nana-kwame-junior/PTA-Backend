@@ -209,38 +209,50 @@ async def deactivate_meeting(
 
 @router.get("")
 async def list_meetings(
-    skip: int = 0,
-    limit: int = 10,
+    page: int = 1,
+    limit: int = 20,
+    skip: Optional[int] = None,
     status: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Meeting).filter(Meeting.is_active == True)
     if status:
         query = query.filter(Meeting.status == status)
-    meetings = query.order_by(Meeting.date.desc()).offset(skip).limit(limit).all()
+    total = query.count()
+    offset = skip if skip is not None else (page - 1) * limit
+    meetings = query.order_by(Meeting.date.desc()).offset(offset).limit(limit).all()
+    effective_page = (offset // limit) + 1 if limit else 1
     return {
         "success": True,
-        "data": [
-            {
-                "id": str(m.id),
-                "title": m.title,
-                "date": m.date.isoformat(),
-                "time": m.time,
-                "venue": m.venue,
-                "agenda": m.agenda,
-                "term": m.term,
-                "academic_year": m.academic_year,
-                "status": m.status.value,
-            }
-            for m in meetings
-        ],
+        "data": {
+            "meetings": [
+                {
+                    "id": str(m.id),
+                    "title": m.title,
+                    "date": m.date.isoformat(),
+                    "time": m.time,
+                    "venue": m.venue,
+                    "agenda": m.agenda,
+                    "term": m.term,
+                    "academic_year": m.academic_year,
+                    "status": m.status.value,
+                }
+                for m in meetings
+            ],
+            "pagination": {
+                "page": effective_page,
+                "limit": limit,
+                "total": total,
+                "total_pages": (total + limit - 1) // limit if limit else 1,
+            },
+        },
     }
 
 
 @router.get("/upcoming")
 async def upcoming_meetings(
     skip: int = 0,
-    limit: int = 10,
+    limit: int = 20,
     db: Session = Depends(get_db),
 ):
     now = datetime.utcnow()
@@ -279,7 +291,7 @@ async def upcoming_meetings(
 async def get_meeting_jobs(
     meeting_id: UUID,
     skip: int = 0,
-    limit: int = 10,
+    limit: int = 20,
     db: Session = Depends(get_db),
 ):
     jobs = (

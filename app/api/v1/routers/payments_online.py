@@ -22,6 +22,8 @@ from app.services.paystack import (
     paystack_is_configured,
 )
 from app.services.sms import send_sms
+from app.services.dues_balance import student_term_dues_balance, format_payment_sms
+from decimal import Decimal
 from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -72,10 +74,25 @@ async def _mark_payment_completed(payment: Payment, db: Session, background_task
 
     parent = db.query(Parent).filter(Parent.id == payment.parent_id).first()
     student = db.query(Student).filter(Student.id == payment.student_id).first()
-    if parent and student:
-        message = (
-            f"Payment of GH₵{payment.amount_ghs} received for {student.full_name} "
-            f"({student.index_number}). Receipt: {payment.receipt_number}. — Mawuli SHS PTA"
+    dues = db.query(DuesConfig).filter(DuesConfig.id == payment.dues_config_id).first()
+    if parent and student and dues:
+        balance = student_term_dues_balance(
+            db,
+            student_id=student.id,
+            academic_year=dues.academic_year,
+            term=dues.term,
+        )
+        balance_after = balance["remaining_ghs"]
+        balance_before = balance_after + Decimal(str(payment.amount_ghs))
+        message = format_payment_sms(
+            student_name=student.full_name,
+            amount_ghs=payment.amount_ghs,
+            term=dues.term,
+            academic_year=dues.academic_year,
+            receipt_number=payment.receipt_number or payment.paystack_reference,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            channel="Online payment",
         )
         background_tasks.add_task(send_sms, parent.phone, message)
         db.add(
@@ -259,7 +276,7 @@ async def list_online_payments(
     term: str = None,
     status: PaymentStatus = None,
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("payments.online")),
 ):
@@ -298,20 +315,35 @@ async def list_online_payments(
 
 @router.get("/parent")
 async def parent_payment_history(
+    page: int = 1,
+    limit: int = 20,
     db: Session = Depends(get_db),
     parent=Depends(require_parent_match),
 ):
+    query = db.query(Payment).filter(Payment.parent_id == parent["id"])
+    total = query.count()
     payments = (
-        db.query(Payment)
-        .filter(Payment.parent_id == parent["id"])
-        .order_by(Payment.created_at.desc())
+        query.order_by(Payment.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     rows = []
     for payment in payments:
         student = db.query(Student).filter(Student.id == payment.student_id).first()
         rows.append(_serialize_payment(payment, student))
-    return {"success": True, "data": {"payments": rows}}
+    return {
+        "success": True,
+        "data": {
+            "payments": rows,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": (total + limit - 1) // limit if limit else 1,
+            },
+        },
+    }
 
 
 @router.get("/{payment_id}/receipt")

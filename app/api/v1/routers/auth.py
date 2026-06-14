@@ -38,6 +38,7 @@ from app.core.config import settings
 from datetime import timedelta, datetime
 from app.services.email import send_password_reset_email
 from app.services.activity_log import log_staff_activity
+from app.core.middleware import hash_reset_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -462,7 +463,7 @@ async def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_
     user = db.query(User).filter(User.email == req.email, User.is_active == True).first()
     if user:
         token = secrets.token_urlsafe(32)
-        user.reset_token = token
+        user.reset_token = hash_reset_token(token)
         user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
         db.commit()
         send_password_reset_email(user.email, user.name, token)
@@ -479,7 +480,7 @@ async def reset_password_with_token(req: ResetPasswordTokenRequest, db: Session 
     if len(req.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     user = db.query(User).filter(
-        User.reset_token == req.token,
+        User.reset_token == hash_reset_token(req.token),
         User.is_active == True,
     ).first()
     if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():

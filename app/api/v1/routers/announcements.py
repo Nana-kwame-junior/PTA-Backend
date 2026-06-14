@@ -74,7 +74,7 @@ async def create_announcement(
 async def list_announcements(
     type: Optional[AnnouncementType] = None,
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):

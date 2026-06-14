@@ -19,7 +19,7 @@ async def sms_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     db: Session = Depends(get_db),
     admin=Depends(require_role("ADMIN"))
 ):

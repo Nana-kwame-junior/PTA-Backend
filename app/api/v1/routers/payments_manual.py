@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from app.workers.lock_tasks import lock_manual_payment
 from app.services.activity_log import log_staff_activity
 from app.services.task_queue import safe_apply_async
+from app.services.dues_balance import student_term_dues_balance, format_payment_sms
 
 router = APIRouter(prefix="/payments/manual", tags=["Manual Payments"])
 logger = logging.getLogger(__name__)
@@ -65,14 +66,27 @@ async def record_manual_payment(
     # Get staff user details
     user = db.query(User).filter(User.id == staff["id"]).first()
     
-    # Determine parent phone(s) to notify
     parent_phones = []
     links = db.query(ParentStudentLink).filter(ParentStudentLink.student_id == student.id).all()
     for link in links:
         parent = db.query(Parent).filter(Parent.id == link.parent_id).first()
         if parent and parent.phone:
             parent_phones.append(parent.phone)
-    parent_phone = parent_phones[0] if parent_phones else student.parent_phone_1
+    if student.parent_phone_1:
+        parent_phones.append(student.parent_phone_1)
+    if student.parent_phone_2:
+        parent_phones.append(student.parent_phone_2)
+    parent_phones = list(dict.fromkeys(parent_phones))
+    parent_phone = parent_phones[0] if parent_phones else None
+
+    balance_info = student_term_dues_balance(
+        db,
+        student_id=student.id,
+        academic_year=dues_config.academic_year,
+        term=dues_config.term,
+    )
+    balance_before = balance_info["remaining_ghs"]
+    balance_after = max(balance_before - Decimal(str(req.amount_ghs)), Decimal("0"))
     
     receipt_number = generate_receipt_number(db)
     manual_payment = ManualPayment(
@@ -106,16 +120,26 @@ async def record_manual_payment(
     
     # Send SMS to all parent phones (non-blocking; failures must not undo payment)
     try:
+        sms_body = format_payment_sms(
+            student_name=student.full_name,
+            amount_ghs=req.amount_ghs,
+            term=dues_config.term,
+            academic_year=dues_config.academic_year,
+            receipt_number=receipt_number,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            channel="Manual payment",
+        )
         for phone in parent_phones:
-            message = f"Cash payment of GH₵{req.amount_ghs} recorded for {student.full_name} ({student.index_number or student.form}), {dues_config.term} dues. Receipt: {receipt_number}. Recorded by {user.name if user else 'Staff'}. — Mawuli SHS PTA"
-            background_tasks.add_task(send_sms, phone, message)
-            sms_log = SmsLog(
-                message_type="MANUAL_PAYMENT",
-                recipient_phone=phone,
-                content=message,
-                status="QUEUED",
+            background_tasks.add_task(send_sms, phone, sms_body)
+            db.add(
+                SmsLog(
+                    message_type="MANUAL_PAYMENT",
+                    recipient_phone=phone,
+                    content=sms_body,
+                    status="QUEUED",
+                )
             )
-            db.add(sms_log)
         manual_payment.sms_sent = bool(parent_phones)
         if parent_phones:
             manual_payment.sms_sent_at = datetime.utcnow()
@@ -236,7 +260,7 @@ async def list_manual_payments(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     page: int = 1,
-    limit: int = 50,
+    limit: int = 20,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("payments.history")),
 ):

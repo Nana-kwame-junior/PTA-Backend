@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app import models  # noqa: F401 — register SQLAlchemy models before create_all
 from app.core.database import engine, Base
 from app.api.v1.routers import (
@@ -25,9 +26,11 @@ app.add_middleware(
         if origin.strip()
     ],
     allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
