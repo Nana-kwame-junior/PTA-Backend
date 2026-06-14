@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from app.core.database import get_db
-from app.core.security import require_role, hash_password
+from app.core.security import require_role, hash_password, verify_password
 from app.models.user import User, UserRole
 from app.schemas.staff import StaffCreate
 from app.services.email import send_temporary_password_email
@@ -61,7 +61,22 @@ async def list_staff(
     admin=Depends(require_role("ADMIN"))
 ):
     staff = db.query(User).filter(User.role.in_([UserRole.ADMIN, UserRole.FINANCIAL_STAFF])).all()
-    return {"success": True, "data": {"staff": staff}}
+    return {
+        "success": True,
+        "data": {
+            "staff": [
+                {
+                    "id": str(u.id),
+                    "name": u.name,
+                    "email": u.email,
+                    "role": u.role.value,
+                    "is_active": u.is_active,
+                    "is_first_login": u.is_first_login,
+                }
+                for u in staff
+            ]
+        },
+    }
 
 @router.patch("/{staff_id}")
 async def update_staff(

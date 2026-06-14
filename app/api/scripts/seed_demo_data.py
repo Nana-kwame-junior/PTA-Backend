@@ -7,6 +7,7 @@ from app.models.student import Student
 from app.models.dues_config import DuesConfig
 from app.models.announcement import Announcement, AnnouncementType
 from app.models.meeting import Meeting, MeetingStatus
+from app.models.academic import AcademicYear, AcademicTerm, TermStatus
 
 ACADEMIC_YEAR = "2024/2025"
 
@@ -52,6 +53,41 @@ STUDENTS = [
 def seed():
     db = SessionLocal()
     try:
+        year = db.query(AcademicYear).filter(AcademicYear.label == ACADEMIC_YEAR).first()
+        if not year:
+            year = AcademicYear(label=ACADEMIC_YEAR, is_active=True)
+            db.add(year)
+            db.commit()
+            db.refresh(year)
+            print(f"Academic year: created {ACADEMIC_YEAR}")
+        else:
+            print(f"Academic year: {ACADEMIC_YEAR} already exists")
+
+        term_row = (
+            db.query(AcademicTerm)
+            .filter(AcademicTerm.academic_year_id == year.id, AcademicTerm.name == "Term 1")
+            .first()
+        )
+        if not term_row:
+            now = datetime.utcnow()
+            db.query(AcademicTerm).filter(AcademicTerm.is_current == True).update({"is_current": False})
+            term_row = AcademicTerm(
+                academic_year_id=year.id,
+                academic_year=ACADEMIC_YEAR,
+                name="Term 1",
+                sequence=1,
+                start_date=now - timedelta(days=30),
+                end_date=now + timedelta(days=60),
+                status=TermStatus.ACTIVE,
+                is_current=True,
+                auto_promote_on_close=True,
+            )
+            db.add(term_row)
+            db.commit()
+            print("Academic term: created Term 1 (current)")
+        else:
+            print("Academic term: Term 1 already exists")
+
         # Students
         student_count = 0
         for row in STUDENTS:

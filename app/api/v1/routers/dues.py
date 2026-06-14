@@ -7,6 +7,7 @@ from datetime import timedelta
 from app.core.database import get_db
 from app.core.security import require_role, get_current_user
 from app.models.dues_config import DuesConfig
+from app.models.academic import AcademicTerm
 from app.schemas.dues import DuesConfigCreate, DuesConfigUpdate
 from app.workers.sms_tasks import send_dues_reminder
 
@@ -68,8 +69,15 @@ async def list_dues_configs(
 async def get_current_dues(
     db: Session = Depends(get_db),
 ):
-    """Public — current dues amount is not sensitive."""
-    config = db.query(DuesConfig).order_by(DuesConfig.due_date.desc()).first()
+    """Public — current dues for the active academic term."""
+    current_term = db.query(AcademicTerm).filter(AcademicTerm.is_current == True).first()
+    query = db.query(DuesConfig)
+    if current_term:
+        query = query.filter(
+            DuesConfig.academic_year == current_term.academic_year,
+            DuesConfig.term == current_term.name,
+        )
+    config = query.order_by(DuesConfig.due_date.desc()).first()
     if not config:
         return {"success": True, "data": None}
     return {

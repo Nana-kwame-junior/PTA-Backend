@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.v1.dependencies import require_role
@@ -23,6 +24,23 @@ def _serialize_student(student: Student) -> dict:
         "parent_phone_2": student.parent_phone_2,
         "is_active": student.is_active,
     }
+
+SAMPLE_CSV = (
+    "index_number,full_name,form,stream,parent_phone_1,parent_phone_2\n"
+    "MWL/2024/001,Kofi Mensah Ansah,Form 1,Science A,+233241234567,\n"
+    "MWL/2024/002,Ama Serwaa Ofori,Form 1,General Arts B,+233244567890,\n"
+    "MWL/2024/003,Kwame Boateng,Form 2,Business C,+233201234567,\n"
+)
+
+
+@router.get("/import/sample")
+async def download_import_sample(admin=Depends(require_role("ADMIN"))):
+    return StreamingResponse(
+        iter([SAMPLE_CSV]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=students_import_sample.csv"},
+    )
+
 
 @router.post("/import")
 async def import_students(
