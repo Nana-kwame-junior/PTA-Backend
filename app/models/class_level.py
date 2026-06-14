@@ -5,7 +5,12 @@ from datetime import datetime
 
 
 class ClassLevel(Base):
-    """School class/level labels used on student records (Nursery, KG, Form 1, etc.)."""
+    """
+    PTA class levels (KG through SHS).
+    KG–Primary: no BECE index, no single programme.
+    JHS: BECE index required, no programme.
+    SHS (Form 1–3): BECE index + programme/stream required.
+    """
 
     __tablename__ = "class_levels"
 
@@ -13,5 +18,7 @@ class ClassLevel(Base):
     name = Column(String(100), unique=True, nullable=False)
     sequence = Column(Integer, unique=True, nullable=False)
     is_terminal = Column(Boolean, default=False)
+    requires_index_number = Column(Boolean, default=False)
+    requires_stream = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

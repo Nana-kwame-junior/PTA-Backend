@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.student import Student
 from app.models.pending_match import PendingMatch
 from app.models.parent_student_link import ParentStudentLink
+from app.models.class_level import ClassLevel
 from app.schemas.auth import (
     WebLoginRequest,
     OtpRequest,
@@ -33,6 +34,30 @@ from datetime import timedelta
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 redis_client = redis.Redis.from_url(settings.redis_url)
+
+
+@router.get("/parent/class-levels")
+async def parent_registration_class_levels(db: Session = Depends(get_db)):
+    """Public list of PTA class levels for parent registration (no auth)."""
+    rows = (
+        db.query(ClassLevel)
+        .filter(ClassLevel.is_active == True)
+        .order_by(ClassLevel.sequence.asc())
+        .all()
+    )
+    return {
+        "success": True,
+        "data": {
+            "levels": [
+                {
+                    "name": row.name,
+                    "requires_index_number": row.requires_index_number,
+                    "requires_stream": row.requires_stream,
+                }
+                for row in rows
+            ]
+        },
+    }
 
 
 def _serialize_candidates(matches):
@@ -58,6 +83,7 @@ def _linked_students(db: Session, parent_id: str):
                     "id": student.id,
                     "full_name": student.full_name,
                     "index_number": student.index_number,
+                    "gender": student.gender,
                     "form": student.form,
                     "stream": student.stream,
                 }
@@ -200,6 +226,7 @@ async def parent_register(
         req.ward_name,
         req.ward_form,
         req.ward_index_number,
+        req.ward_stream,
     )
     candidates = _serialize_candidates(matches)
 

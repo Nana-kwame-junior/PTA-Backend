@@ -33,7 +33,7 @@ async def create_staff(
         name=req.name,
         email=req.email,
         hashed_password=hashed,
-        role=UserRole.FINANCIAL_STAFF,   # only FINANCIAL_STAFF can be created via this endpoint
+        role=UserRole(req.role),
         is_active=True,
         is_first_login=True
     )

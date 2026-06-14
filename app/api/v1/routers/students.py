@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.api.v1.dependencies import require_role
 from app.models.student import Student
 from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest
+from app.services.student_validation import validate_student_fields, normalize_gender
 import csv
 import io
 from uuid import UUID
@@ -17,6 +18,7 @@ def _serialize_student(student: Student) -> dict:
         "id": str(student.id),
         "index_number": student.index_number,
         "full_name": student.full_name,
+        "gender": student.gender,
         "form": student.form,
         "stream": student.stream,
         "academic_year": student.academic_year,
@@ -25,13 +27,13 @@ def _serialize_student(student: Student) -> dict:
         "is_active": student.is_active,
     }
 
+
 SAMPLE_CSV = (
-    "index_number,full_name,form,stream,parent_phone_1,parent_phone_2\n"
-    "MWL/2024/001,Ama Adjei,Nursery,Red Group,+233241234567,\n"
-    "MWL/2024/002,Kwame Mensah,KG,Blue Group,+233244567890,\n"
-    "MWL/2024/003,Akosua Boateng,Primary 1,General,+233201234567,\n"
-    "MWL/2024/004,Yaw Ofori,JHS 1,Science,+233551234567,\n"
-    "MWL/2024/005,Efua Darko,Form 2,Arts,+233501234567,\n"
+    "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
+    ",Ama Adjei,F,KG,,+233241234567,\n"
+    ",Kwame Adjei,M,Primary 2,,+233241234567,\n"
+    "0111025007,Yaw Ofori,M,JHS 2,,+233551234567,\n"
+    "0111025099,Efua Darko,F,Form 2,General Arts,+233501234567,\n"
 )
 
 
@@ -49,29 +51,53 @@ async def import_students(
     file: UploadFile = File(...),
     academic_year: str = Query(...),
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN"))
+    admin=Depends(require_role("ADMIN")),
 ):
     contents = await file.read()
-    csv_reader = csv.DictReader(io.StringIO(contents.decode('utf-8')))
+    csv_reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
     imported = 0
     errors = []
+    row_count = 0
     for i, row in enumerate(csv_reader):
+        row_count = i + 1
         try:
+            idx, strm, gender = validate_student_fields(
+                db,
+                row["form"],
+                row.get("index_number"),
+                row.get("stream"),
+                row.get("gender"),
+            )
+            if idx:
+                dup = db.query(Student).filter(Student.index_number == idx).first()
+                if dup:
+                    raise ValueError(f"Duplicate index number {idx}")
             student = Student(
-                index_number=row['index_number'],
-                full_name=row['full_name'],
-                form=row['form'],
-                stream=row['stream'],
+                index_number=idx,
+                full_name=row["full_name"].strip(),
+                gender=gender,
+                form=row["form"].strip(),
+                stream=strm,
                 academic_year=academic_year,
-                parent_phone_1=row.get('parent_phone_1'),
-                parent_phone_2=row.get('parent_phone_2')
+                parent_phone_1=row.get("parent_phone_1") or None,
+                parent_phone_2=row.get("parent_phone_2") or None,
             )
             db.add(student)
             imported += 1
         except Exception as e:
-            errors.append({"row": i+2, "reason": str(e)})
-    db.commit()
-    return {"success": True, "data": {"total_rows": i+1, "imported": imported, "skipped_duplicates": len(errors), "errors": errors}}
+            errors.append({"row": i + 2, "reason": str(e)})
+    if imported:
+        db.commit()
+    return {
+        "success": True,
+        "data": {
+            "total_rows": row_count,
+            "imported": imported,
+            "skipped_duplicates": len(errors),
+            "errors": errors,
+        },
+    }
+
 
 @router.get("")
 async def list_students(
@@ -83,11 +109,14 @@ async def list_students(
     academic_year: str = None,
     is_active: bool = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("FINANCIAL_STAFF"))
+    current_user=Depends(require_role("FINANCIAL_STAFF")),
 ):
     query = db.query(Student)
     if search:
-        query = query.filter(Student.full_name.ilike(f"%{search}%") | Student.index_number.ilike(f"%{search}%"))
+        query = query.filter(
+            Student.full_name.ilike(f"%{search}%")
+            | Student.index_number.ilike(f"%{search}%")
+        )
     if form:
         query = query.filter(Student.form == form)
     if stream:
@@ -97,7 +126,7 @@ async def list_students(
     if is_active is not None:
         query = query.filter(Student.is_active == is_active)
     total = query.count()
-    students = query.offset((page-1)*limit).limit(limit).all()
+    students = query.offset((page - 1) * limit).limit(limit).all()
     return {
         "success": True,
         "data": {
@@ -111,34 +140,86 @@ async def list_students(
         },
     }
 
+
 @router.get("/{index_number}")
-async def get_student_by_index(index_number: str, db: Session = Depends(get_db), staff=Depends(require_role("FINANCIAL_STAFF"))):
+async def get_student_by_index(
+    index_number: str,
+    db: Session = Depends(get_db),
+    staff=Depends(require_role("FINANCIAL_STAFF")),
+):
     student = db.query(Student).filter(Student.index_number == index_number).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     return {"success": True, "data": _serialize_student(student)}
 
+
 @router.post("")
-async def create_student(data: StudentCreate, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
-    student = Student(**data.dict())
+async def create_student(
+    data: StudentCreate,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role("ADMIN")),
+):
+    try:
+        idx, strm, gender = validate_student_fields(
+            db, data.form, data.index_number, data.stream, data.gender
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    student = Student(
+        index_number=idx,
+        full_name=data.full_name.strip(),
+        gender=gender,
+        form=data.form.strip(),
+        stream=strm,
+        academic_year=data.academic_year,
+        parent_phone_1=data.parent_phone_1,
+        parent_phone_2=data.parent_phone_2,
+    )
     db.add(student)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Student record already exists") from e
     db.refresh(student)
     return {"success": True, "data": _serialize_student(student)}
 
+
 @router.patch("/{student_id}")
-async def update_student(student_id: UUID, data: StudentUpdate, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
+async def update_student(
+    student_id: UUID,
+    data: StudentUpdate,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role("ADMIN")),
+):
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404)
-    for key, value in data.dict(exclude_unset=True).items():
+    payload = data.dict(exclude_unset=True)
+    form = payload.get("form", student.form)
+    index_number = payload.get("index_number", student.index_number)
+    stream = payload.get("stream", student.stream)
+    gender = payload.get("gender", student.gender)
+    try:
+        idx, strm, g = validate_student_fields(db, form, index_number, stream, gender)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    payload["index_number"] = idx
+    payload["stream"] = strm
+    payload["gender"] = g
+    for key, value in payload.items():
         setattr(student, key, value)
     db.commit()
     return {"success": True, "data": _serialize_student(student)}
 
+
 @router.delete("/{student_id}")
-async def delete_student(student_id: UUID, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
-    
+async def delete_student(
+    student_id: UUID,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role("ADMIN")),
+):
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404)

@@ -12,60 +12,91 @@ from app.models.class_level import ClassLevel
 
 ACADEMIC_YEAR = "2024/2025"
 
+# PTA covers KG → Primary → JHS → SHS only (no Nursery/Crèche).
 DEFAULT_CLASS_LEVELS = [
-    {"name": "Nursery", "sequence": 1, "is_terminal": False},
-    {"name": "KG", "sequence": 2, "is_terminal": False},
-    {"name": "Primary 1", "sequence": 3, "is_terminal": False},
-    {"name": "Primary 2", "sequence": 4, "is_terminal": False},
-    {"name": "Primary 3", "sequence": 5, "is_terminal": False},
-    {"name": "Primary 4", "sequence": 6, "is_terminal": False},
-    {"name": "Primary 5", "sequence": 7, "is_terminal": False},
-    {"name": "Primary 6", "sequence": 8, "is_terminal": False},
-    {"name": "JHS 1", "sequence": 9, "is_terminal": False},
-    {"name": "JHS 2", "sequence": 10, "is_terminal": False},
-    {"name": "JHS 3", "sequence": 11, "is_terminal": False},
-    {"name": "Form 1", "sequence": 12, "is_terminal": False},
-    {"name": "Form 2", "sequence": 13, "is_terminal": False},
-    {"name": "Form 3", "sequence": 14, "is_terminal": True},
+    {"name": "KG", "sequence": 1, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 1", "sequence": 2, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 2", "sequence": 3, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 3", "sequence": 4, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 4", "sequence": 5, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 5", "sequence": 6, "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 6", "sequence": 7, "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 1", "sequence": 8, "requires_index_number": True, "requires_stream": False},
+    {"name": "JHS 2", "sequence": 9, "requires_index_number": True, "requires_stream": False},
+    {"name": "JHS 3", "sequence": 10, "requires_index_number": True, "requires_stream": False},
+    {"name": "Form 1", "sequence": 11, "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 2", "sequence": 12, "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 3", "sequence": 13, "is_terminal": True, "requires_index_number": True, "requires_stream": True},
 ]
 
+# Wards for mobile parent registration testing (parent records are created via the app).
 STUDENTS = [
     {
-        "index_number": "MWL/2024/001",
+        "index_number": None,
         "full_name": "Ama Adjei",
-        "form": "Nursery",
-        "stream": "Red Group",
+        "gender": "F",
+        "form": "KG",
+        "stream": None,
         "parent_phone_1": "+233241234567",
     },
     {
-        "index_number": "MWL/2024/002",
-        "full_name": "Kwame Mensah",
-        "form": "KG",
-        "stream": "Blue Group",
-        "parent_phone_1": "+233244567890",
+        "index_number": None,
+        "full_name": "Kwame Adjei",
+        "gender": "M",
+        "form": "Primary 2",
+        "stream": None,
+        "parent_phone_1": "+233241234567",
     },
     {
-        "index_number": "MWL/2024/003",
-        "full_name": "Akosua Boateng",
-        "form": "Primary 1",
-        "stream": "General",
-        "parent_phone_1": "+233201234567",
-    },
-    {
-        "index_number": "MWL/2024/004",
+        "index_number": "0111025007",
         "full_name": "Yaw Ofori",
-        "form": "JHS 1",
-        "stream": "Science",
+        "gender": "M",
+        "form": "JHS 2",
+        "stream": None,
         "parent_phone_1": "+233551234567",
     },
     {
-        "index_number": "MWL/2024/005",
+        "index_number": "0111025099",
         "full_name": "Efua Darko",
+        "gender": "F",
         "form": "Form 2",
-        "stream": "Arts",
+        "stream": "General Arts",
         "parent_phone_1": "+233501234567",
     },
+    {
+        "index_number": "0111025100",
+        "full_name": "Kofi Mensah",
+        "gender": "M",
+        "form": "Form 1",
+        "stream": "Science",
+        "parent_phone_1": "+233244567890",
+    },
 ]
+
+MOBILE_TEST_GUIDE = """
+Mobile parent registration test data
+------------------------------------
+Scenario A — KG ward (no index number):
+  Phone: +233241234567
+  Parent name: (any, e.g. Grace Adjei)
+  Ward name: Ama Adjei
+  Ward class: KG
+  Index: leave blank
+
+Scenario B — JHS ward (10-digit BECE index):
+  Phone: +233551234567
+  Ward name: Yaw Ofori
+  Ward class: JHS 2
+  Index: 0111025007
+
+Scenario C — SHS ward (index + programme):
+  Phone: +233501234567
+  Ward name: Efua Darko
+  Ward class: Form 2
+  Index: 0111025099
+
+Use OTP from SMS (or Redis in dev) after POST /auth/parent/request-otp.
+"""
 
 
 def seed():
@@ -110,27 +141,45 @@ def seed():
         for row in DEFAULT_CLASS_LEVELS:
             existing = db.query(ClassLevel).filter(ClassLevel.name == row["name"]).first()
             if existing:
+                for key in ("requires_index_number", "requires_stream", "is_terminal", "sequence"):
+                    if key in row:
+                        setattr(existing, key, row[key])
                 continue
             db.add(ClassLevel(**row, is_active=True))
             level_count += 1
+        db.commit()
         if level_count:
-            db.commit()
             print(f"Class levels: created {level_count}")
         else:
-            print("Class levels: already seeded")
+            print("Class levels: updated/seeded")
 
-        # Students
         student_count = 0
         for row in STUDENTS:
-            existing = db.query(Student).filter(Student.index_number == row["index_number"]).first()
+            if row.get("index_number"):
+                existing = (
+                    db.query(Student)
+                    .filter(Student.index_number == row["index_number"])
+                    .first()
+                )
+            else:
+                existing = (
+                    db.query(Student)
+                    .filter(
+                        Student.full_name == row["full_name"],
+                        Student.form == row["form"],
+                        Student.index_number.is_(None),
+                    )
+                    .first()
+                )
             if existing:
                 continue
             db.add(
                 Student(
-                    index_number=row["index_number"],
+                    index_number=row.get("index_number"),
                     full_name=row["full_name"],
+                    gender=row.get("gender"),
                     form=row["form"],
-                    stream=row["stream"],
+                    stream=row.get("stream"),
                     academic_year=ACADEMIC_YEAR,
                     parent_phone_1=row["parent_phone_1"],
                     is_active=True,
@@ -138,9 +187,8 @@ def seed():
             )
             student_count += 1
         db.commit()
-        print(f"Students: added {student_count} new (total sample set: {len(STUDENTS)})")
+        print(f"Students: added {student_count} new (sample set: {len(STUDENTS)})")
 
-        # Dues
         dues = (
             db.query(DuesConfig)
             .filter(DuesConfig.academic_year == ACADEMIC_YEAR, DuesConfig.term == "Term 1")
@@ -161,7 +209,6 @@ def seed():
         else:
             print("Dues: Term 1 config already exists")
 
-        # Announcements
         announcements = [
             {
                 "title": "Term 1 PTA Dues Now Open",
@@ -189,7 +236,6 @@ def seed():
         db.commit()
         print(f"Announcements: added {ann_added} new")
 
-        # Meetings
         now = datetime.utcnow()
         meetings = [
             {
@@ -246,6 +292,7 @@ def seed():
             f"\nTable counts — students: {total_students}, dues: {total_dues}, "
             f"announcements: {total_ann}, meetings: {total_mtg}"
         )
+        print(MOBILE_TEST_GUIDE)
     finally:
         db.close()
 

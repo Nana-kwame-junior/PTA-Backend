@@ -8,4 +8,4 @@ class StaffRole(str, Enum):
 class StaffCreate(BaseModel):
     name: str
     email: EmailStr
-    role: StaffRole
+    role: StaffRole = StaffRole.FINANCIAL_STAFF
