@@ -74,9 +74,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 def require_role(required_role: str):
     async def role_dependency(current_user = Depends(get_current_user)):
-        if current_user["role"] != required_role:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return current_user
+        role = current_user["role"]
+        if role == "ADMIN" or role == required_role:
+            return current_user
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     return role_dependency
 
 async def require_parent_match(current_user = Depends(get_current_user)):

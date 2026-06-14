@@ -67,11 +67,22 @@ async def list_dues_configs(
 @router.get("/current")
 async def get_current_dues(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
 ):
-    # For simplicity, get the most recent config by due_date
+    """Public — current dues amount is not sensitive."""
     config = db.query(DuesConfig).order_by(DuesConfig.due_date.desc()).first()
-    return {"success": True, "data": config}
+    if not config:
+        return {"success": True, "data": None}
+    return {
+        "success": True,
+        "data": {
+            "id": str(config.id),
+            "academic_year": config.academic_year,
+            "term": config.term,
+            "amount_ghs": str(config.amount_ghs),
+            "due_date": config.due_date.isoformat() if config.due_date else None,
+            "grace_period_days": config.grace_period_days,
+        },
+    }
 
 @router.patch("/{config_id}")
 async def update_dues_config(

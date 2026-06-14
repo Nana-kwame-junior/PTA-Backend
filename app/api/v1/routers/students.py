@@ -10,6 +10,20 @@ from uuid import UUID
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
+
+def _serialize_student(student: Student) -> dict:
+    return {
+        "id": str(student.id),
+        "index_number": student.index_number,
+        "full_name": student.full_name,
+        "form": student.form,
+        "stream": student.stream,
+        "academic_year": student.academic_year,
+        "parent_phone_1": student.parent_phone_1,
+        "parent_phone_2": student.parent_phone_2,
+        "is_active": student.is_active,
+    }
+
 @router.post("/import")
 async def import_students(
     file: UploadFile = File(...),
@@ -64,14 +78,25 @@ async def list_students(
         query = query.filter(Student.is_active == is_active)
     total = query.count()
     students = query.offset((page-1)*limit).limit(limit).all()
-    return {"success": True, "data": {"students": students, "pagination": {"page": page, "limit": limit, "total": total, "total_pages": (total+limit-1)//limit}}}
+    return {
+        "success": True,
+        "data": {
+            "students": [_serialize_student(s) for s in students],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": (total + limit - 1) // limit,
+            },
+        },
+    }
 
 @router.get("/{index_number}")
 async def get_student_by_index(index_number: str, db: Session = Depends(get_db), staff=Depends(require_role("FINANCIAL_STAFF"))):
     student = db.query(Student).filter(Student.index_number == index_number).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    return {"success": True, "data": student}
+    return {"success": True, "data": _serialize_student(student)}
 
 @router.post("")
 async def create_student(data: StudentCreate, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
@@ -79,7 +104,7 @@ async def create_student(data: StudentCreate, db: Session = Depends(get_db), adm
     db.add(student)
     db.commit()
     db.refresh(student)
-    return {"success": True, "data": student}
+    return {"success": True, "data": _serialize_student(student)}
 
 @router.patch("/{student_id}")
 async def update_student(student_id: UUID, data: StudentUpdate, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
@@ -89,7 +114,7 @@ async def update_student(student_id: UUID, data: StudentUpdate, db: Session = De
     for key, value in data.dict(exclude_unset=True).items():
         setattr(student, key, value)
     db.commit()
-    return {"success": True, "data": student}
+    return {"success": True, "data": _serialize_student(student)}
 
 @router.delete("/{student_id}")
 async def delete_student(student_id: UUID, db: Session = Depends(get_db), admin=Depends(require_role("ADMIN"))):
