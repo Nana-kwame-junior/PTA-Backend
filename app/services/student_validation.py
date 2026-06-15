@@ -5,6 +5,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.models.class_level import ClassLevel
+from app.services.class_level_names import find_class_level, normalize_student_form_name
 
 BECE_INDEX_PATTERN = re.compile(r"^\d{10}$")
 
@@ -21,24 +22,12 @@ def normalize_gender(value: str | None) -> str | None:
 
 
 def normalize_form_name(form: str) -> str:
-    """Map common CSV variants to configured class level names."""
-    name = form.strip()
-    aliases = {
-        "KG 1": "KG",
-        "KG 2": "KG",
-        "KG1": "KG",
-        "KG2": "KG",
-        "Kindergarten": "KG",
-    }
-    return aliases.get(name, name)
+    """Backward-compatible alias used by student import."""
+    return normalize_student_form_name(form)
 
 
 def get_class_level(db: Session, form: str) -> ClassLevel:
-    level = (
-        db.query(ClassLevel)
-        .filter(ClassLevel.name == normalize_form_name(form), ClassLevel.is_active == True)
-        .first()
-    )
+    level = find_class_level(db, form)
     if not level:
         raise ValueError(f"Unknown class level '{form}'. Configure it under Academic Calendar first.")
     return level
