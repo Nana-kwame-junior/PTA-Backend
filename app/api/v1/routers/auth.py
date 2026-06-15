@@ -10,7 +10,8 @@ from app.core.security import (
     get_current_user,
     require_registration_token,
 )
-from app.services.sms import send_sms
+from app.services.sms import send_otp_sms
+from app.services.otp_store import store_otp, fetch_otp, delete_otp
 from app.services.matching import find_matches
 from app.models.parent import Parent, MatchStatus
 from app.models.user import User
@@ -31,7 +32,6 @@ from app.schemas.auth import (
     StaffProfileUpdate,
 )
 import random
-import redis
 import json
 import secrets
 from app.core.config import settings
@@ -41,8 +41,6 @@ from app.services.activity_log import log_staff_activity
 from app.core.middleware import hash_reset_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-
-redis_client = redis.Redis.from_url(settings.redis_url)
 
 
 @router.get("/parent/class-levels")
@@ -146,8 +144,12 @@ async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
     parent = db.query(Parent).filter(Parent.phone == phone).first()
     flow = "LOGIN" if parent and parent.match_status == MatchStatus.MATCHED else "REGISTER"
     otp = str(random.randint(100000, 999999))
-    redis_client.setex(f"otp:{phone}", settings.otp_expiry_seconds, otp)
-    await send_sms(phone, f"Your PTA OTP is {otp}. Valid for 10 minutes.")
+    store_otp(db, phone, otp)
+    try:
+        await send_otp_sms(phone, otp)
+    except Exception as exc:
+        delete_otp(db, phone)
+        raise HTTPException(status_code=503, detail="Could not send OTP SMS. Try again shortly.") from exc
     return {
         "success": True,
         "data": {
@@ -161,10 +163,10 @@ async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
 @router.post("/parent/verify-otp")
 async def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
     phone = req.phone
-    stored_otp = redis_client.get(f"otp:{phone}")
-    if not stored_otp or stored_otp.decode() != req.otp:
+    stored_otp = fetch_otp(db, phone)
+    if not stored_otp or stored_otp != req.otp:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    redis_client.delete(f"otp:{phone}")
+    delete_otp(db, phone)
 
     parent = db.query(Parent).filter(Parent.phone == phone).first()
     if parent:
@@ -477,19 +479,44 @@ async def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_
 
 @router.post("/web/reset-password")
 async def reset_password_with_token(req: ResetPasswordTokenRequest, db: Session = Depends(get_db)):
+    from sqlalchemy.exc import OperationalError
+    import time
+
     if len(req.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    user = db.query(User).filter(
-        User.reset_token == hash_reset_token(req.token),
-        User.is_active == True,
-    ).first()
+
+    user = None
+    for attempt in range(3):
+        try:
+            user = db.query(User).filter(
+                User.reset_token == hash_reset_token(req.token),
+                User.is_active == True,
+            ).first()
+            break
+        except OperationalError as exc:
+            db.rollback()
+            if attempt < 2:
+                time.sleep(0.3 * (attempt + 1))
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Database temporarily unavailable. Please try again.",
+                ) from exc
+
     if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
     user.hashed_password = hash_password(req.new_password)
     user.reset_token = None
     user.reset_token_expires = None
     user.is_first_login = False
-    db.commit()
+    try:
+        db.commit()
+    except OperationalError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from exc
     return {
         "success": True,
         "data": {"message": "Password updated. You can sign in now."},

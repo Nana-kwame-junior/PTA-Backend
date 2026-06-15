@@ -10,7 +10,7 @@ from app.models.parent_student_link import ParentStudentLink
 from app.models.payment import Payment
 from app.models.manual_payment import ManualPayment
 from app.models.sms_log import SmsLog
-from app.services.sms import send_sms
+from app.services.sms import send_sms_sync
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def send_meeting_reminder(self, meeting_id: str, reminder_type: str):
         phones = get_distinct_parent_phones(db)
         for phone in phones:
             try:
-                send_sms(phone, message)
+                send_sms_sync(phone, message)
                 sms_log = SmsLog(
                     message_type=f"MEETING_REMINDER_{reminder_type}",
                     recipient_phone=phone,
@@ -101,7 +101,7 @@ def send_dues_reminder(self, dues_config_id: str, reminder_type: str):
             phones = get_parents_for_student(db, student.id)
             for phone in phones:
                 try:
-                    send_sms(phone, message)
+                    send_sms_sync(phone, message)
                     sms_log = SmsLog(
                         message_type=f"DUES_REMINDER_{reminder_type}",
                         recipient_phone=phone,

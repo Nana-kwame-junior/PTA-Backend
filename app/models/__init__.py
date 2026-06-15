@@ -17,3 +17,4 @@ from .expenditure import Expenditure
 from .academic import AcademicYear, AcademicTerm
 from .class_level import ClassLevel
 from .staff_activity import StaffActivityLog
+from .otp_session import OtpSession

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import json
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.job_record import JobRecord
@@ -13,6 +13,7 @@ from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel, AttendanceRecord
 from app.services.sms import send_sms
+from app.services.meeting_sms import schedule_meeting_reminders_sync
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_meeting_reminder
 from app.services.task_queue import safe_apply_async
@@ -24,9 +25,21 @@ def cancel_meeting_jobs(meeting_id: str, db: Session):
     db.query(JobRecord).filter(JobRecord.reference_id == meeting_id).update({"status": "CANCELLED"})
     db.commit()
 
+
+def _schedule_meeting_sms_background(meeting_id: str) -> None:
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if meeting:
+            schedule_meeting_reminders_sync(db, meeting)
+    finally:
+        db.close()
+
+
 @router.post("")
 async def create_meeting(
     req: MeetingCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("meetings")),
 ):
@@ -64,9 +77,8 @@ async def create_meeting(
         eta=eta_d0,
     )
 
-    # Store job records (optional but good for monitoring)
-    # (You can store Celery task IDs returned by apply_async)
-    # For simplicity we skip storing IDs here.
+    # Schedule SMS via mNotify (works without Redis/Celery)
+    background_tasks.add_task(_schedule_meeting_sms_background, str(meeting.id))
 
     return {
         "success": True,
@@ -89,6 +101,7 @@ async def create_meeting(
 async def update_meeting(
     meeting_id: UUID,
     req: MeetingUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("meetings")),
 ):
@@ -120,6 +133,7 @@ async def update_meeting(
             args=[str(meeting.id), "D0"],
             eta=eta_d0,
         )
+        background_tasks.add_task(_schedule_meeting_sms_background, str(meeting.id))
         # Send reschedule SMS (background)
         from app.services.sms import send_sms
         parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
