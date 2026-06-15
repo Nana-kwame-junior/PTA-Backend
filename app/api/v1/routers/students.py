@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.api.v1.dependencies import require_permission
 from app.models.student import Student
 from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest
-from app.services.student_validation import validate_student_fields, normalize_gender
+from app.services.student_validation import validate_student_fields, normalize_gender, normalize_form_name
 from app.services.activity_log import log_staff_activity
 import csv
 import io
@@ -55,19 +55,26 @@ async def import_students(
     staff=Depends(require_permission("students")),
 ):
     contents = await file.read()
-    csv_reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
+    text = contents.decode("utf-8-sig")
+    csv_reader = csv.DictReader(io.StringIO(text))
     imported = 0
     errors = []
     row_count = 0
     for i, row in enumerate(csv_reader):
         row_count = i + 1
+        normalized_row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
         try:
+            form_name = normalize_form_name(normalized_row.get("form", ""))
+            if not form_name:
+                raise ValueError("form is required")
+            if not normalized_row.get("full_name"):
+                raise ValueError("full_name is required")
             idx, strm, gender = validate_student_fields(
                 db,
-                row["form"],
-                row.get("index_number"),
-                row.get("stream"),
-                row.get("gender"),
+                form_name,
+                normalized_row.get("index_number"),
+                normalized_row.get("stream"),
+                normalized_row.get("gender"),
             )
             if idx:
                 dup = db.query(Student).filter(Student.index_number == idx).first()
@@ -75,13 +82,13 @@ async def import_students(
                     raise ValueError(f"Duplicate index number {idx}")
             student = Student(
                 index_number=idx,
-                full_name=row["full_name"].strip(),
+                full_name=normalized_row["full_name"],
                 gender=gender,
-                form=row["form"].strip(),
+                form=form_name,
                 stream=strm,
-                academic_year=academic_year,
-                parent_phone_1=row.get("parent_phone_1") or None,
-                parent_phone_2=row.get("parent_phone_2") or None,
+                academic_year=academic_year.strip(),
+                parent_phone_1=normalized_row.get("parent_phone_1") or None,
+                parent_phone_2=normalized_row.get("parent_phone_2") or None,
             )
             db.add(student)
             imported += 1
@@ -177,8 +184,9 @@ async def create_student(
     staff=Depends(require_permission("students")),
 ):
     try:
+        form_name = normalize_form_name(data.form)
         idx, strm, gender = validate_student_fields(
-            db, data.form, data.index_number, data.stream, data.gender
+            db, form_name, data.index_number, data.stream, data.gender
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -187,7 +195,7 @@ async def create_student(
         index_number=idx,
         full_name=data.full_name.strip(),
         gender=gender,
-        form=data.form.strip(),
+        form=form_name,
         stream=strm,
         academic_year=data.academic_year,
         parent_phone_1=data.parent_phone_1,

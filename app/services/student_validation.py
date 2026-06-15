@@ -20,10 +20,23 @@ def normalize_gender(value: str | None) -> str | None:
     raise ValueError(f"Invalid gender '{value}' — use M/F or Male/Female")
 
 
+def normalize_form_name(form: str) -> str:
+    """Map common CSV variants to configured class level names."""
+    name = form.strip()
+    aliases = {
+        "KG 1": "KG",
+        "KG 2": "KG",
+        "KG1": "KG",
+        "KG2": "KG",
+        "Kindergarten": "KG",
+    }
+    return aliases.get(name, name)
+
+
 def get_class_level(db: Session, form: str) -> ClassLevel:
     level = (
         db.query(ClassLevel)
-        .filter(ClassLevel.name == form.strip(), ClassLevel.is_active == True)
+        .filter(ClassLevel.name == normalize_form_name(form), ClassLevel.is_active == True)
         .first()
     )
     if not level:
