@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import require_permission, get_current_user
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
 from app.services.promotion import promote_students_for_year
 
@@ -104,6 +104,14 @@ async def create_academic_term(
     db.add(term)
     db.commit()
     db.refresh(term)
+
+    has_current = db.query(AcademicTerm).filter(AcademicTerm.is_current == True).first()
+    if not has_current:
+        term.is_current = True
+        term.status = TermStatus.ACTIVE
+        db.commit()
+        db.refresh(term)
+
     return {"success": True, "data": _serialize_term(term)}
 
 
@@ -126,8 +134,10 @@ async def list_terms_for_year(
 async def list_all_terms(
     academic_year: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_permission("academic")),
+    current_user=Depends(get_current_user),
 ):
+    if current_user["role"] not in ("ADMIN", "FINANCIAL_STAFF"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     query = db.query(AcademicTerm)
     if academic_year:
         query = query.filter(AcademicTerm.academic_year == academic_year)
