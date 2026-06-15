@@ -157,6 +157,18 @@ async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
     phone = req.phone
     parent = db.query(Parent).filter(Parent.phone == phone).first()
     flow = _otp_flow_for_parent(parent)
+
+    if req.purpose == "login" and flow == "REGISTER":
+        raise HTTPException(
+            status_code=404,
+            detail="No registered account for this number. Please create an account first.",
+        )
+    if req.purpose == "register" and flow == "LOGIN":
+        raise HTTPException(
+            status_code=409,
+            detail="This number is already registered. Please sign in instead.",
+        )
+
     code = str(random.randint(100000, 999999))
     store_otp(db, phone, code)
     try:
