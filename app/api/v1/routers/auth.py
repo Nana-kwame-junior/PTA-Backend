@@ -14,6 +14,7 @@ from app.services.sms import send_verification_code_sms
 from app.services.sms_errors import SmsDeliveryError
 from app.services.otp_store import store_otp, fetch_otp, delete_otp
 from app.services.matching import find_matches
+from app.services.student_validation import validate_student_fields
 from app.models.parent import Parent, MatchStatus
 from app.models.user import User
 from app.services.permissions import resolve_user_permissions
@@ -42,6 +43,18 @@ from app.services.activity_log import log_staff_activity
 from app.core.middleware import hash_reset_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+def _parent_profile_complete(parent: Parent) -> bool:
+    return bool((parent.full_name or "").strip())
+
+
+def _otp_flow_for_parent(parent: Parent | None) -> str:
+    if not parent:
+        return "REGISTER"
+    if parent.match_status == MatchStatus.MATCHED or _parent_profile_complete(parent):
+        return "LOGIN"
+    return "REGISTER"
 
 
 @router.get("/parent/class-levels")
@@ -143,7 +156,7 @@ async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
 async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
     phone = req.phone
     parent = db.query(Parent).filter(Parent.phone == phone).first()
-    flow = "LOGIN" if parent and parent.match_status == MatchStatus.MATCHED else "REGISTER"
+    flow = _otp_flow_for_parent(parent)
     code = str(random.randint(100000, 999999))
     store_otp(db, phone, code)
     try:
@@ -178,7 +191,7 @@ async def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
 
     parent = db.query(Parent).filter(Parent.phone == phone).first()
     if parent:
-        if parent.match_status == MatchStatus.MATCHED:
+        if parent.match_status == MatchStatus.MATCHED or _parent_profile_complete(parent):
             access_token, refresh_token, _ = _parent_tokens(db, parent)
             return {
                 "success": True,
@@ -190,6 +203,7 @@ async def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
                         "id": parent.id,
                         "full_name": parent.full_name,
                         "phone": parent.phone,
+                        "match_status": parent.match_status.value,
                         "linked_students": _linked_students(db, parent.id),
                     },
                 },
@@ -240,13 +254,23 @@ async def parent_register(
     parent.relationship = req.relationship
     db.commit()
 
+    try:
+        ward_index, ward_stream, _ = validate_student_fields(
+            db,
+            req.ward_form,
+            req.ward_index_number,
+            req.ward_stream,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     matches = find_matches(
         parent,
         db,
         req.ward_name,
         req.ward_form,
-        req.ward_index_number,
-        req.ward_stream,
+        ward_index,
+        ward_stream,
     )
     candidates = _serialize_candidates(matches)
 
@@ -285,7 +309,7 @@ async def parent_register(
         parent_id=parent.id,
         entered_ward_name=req.ward_name,
         entered_ward_form=req.ward_form,
-        entered_index_number=req.ward_index_number,
+        entered_index_number=ward_index,
         top_candidates=json.dumps(candidates),
     )
     db.add(pending)

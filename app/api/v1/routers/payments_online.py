@@ -23,7 +23,6 @@ from app.services.paystack import (
 )
 from app.services.sms import send_sms_background
 from app.services.dues_balance import student_term_dues_balance, format_payment_sms
-from decimal import Decimal
 from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse, HTMLResponse
