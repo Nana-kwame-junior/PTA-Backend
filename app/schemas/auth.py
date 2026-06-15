@@ -27,7 +27,6 @@ class OtpRequest(BaseModel):
     purpose: Literal["login", "register"] = "register"
 
 
-
     @field_validator("phone")
 
     @classmethod
@@ -40,6 +39,20 @@ class OtpRequest(BaseModel):
 
         except PhoneValidationError as exc:
 
+            raise ValueError(str(exc)) from exc
+
+
+
+class ParentPhoneRequest(BaseModel):
+
+    phone: str = Field(..., min_length=9, max_length=20)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        try:
+            return normalize_ghana_phone(v)
+        except PhoneValidationError as exc:
             raise ValueError(str(exc)) from exc
 
 

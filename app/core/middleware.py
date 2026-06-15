@@ -35,6 +35,9 @@ STRICT_PATHS = {
     "/api/v1/auth/web/login": (10, 60),
     "/api/v1/auth/web/forgot-password": (5, 60),
     "/api/v1/auth/web/reset-password": (5, 60),
+    "/api/v1/auth/parent/login": (10, 60),
+    "/api/v1/auth/parent/register/send-code": (5, 60),
+    "/api/v1/auth/parent/register/verify-code": (10, 60),
     "/api/v1/auth/parent/request-otp": (5, 60),
     "/api/v1/auth/parent/verify-otp": (10, 60),
 }

@@ -26,6 +26,7 @@ from app.schemas.auth import (
     WebLoginRequest,
     OtpRequest,
     OtpVerifyRequest,
+    ParentPhoneRequest,
     ParentRegisterRequest,
     SelectCandidateRequest,
     RefreshTokenRequest,
@@ -128,6 +129,113 @@ def _parent_tokens(db: Session, parent: Parent):
     return access_token, refresh_token, matched_ids
 
 
+def _serialize_parent(db: Session, parent: Parent) -> dict:
+    return {
+        "id": parent.id,
+        "full_name": parent.full_name,
+        "phone": parent.phone,
+        "match_status": parent.match_status.value,
+        "linked_students": _linked_students(db, parent.id),
+    }
+
+
+async def _send_phone_verification_code(db: Session, phone: str) -> None:
+    code = str(random.randint(100000, 999999))
+    store_otp(db, phone, code)
+    try:
+        await send_verification_code_sms(phone, code)
+    except SmsDeliveryError as exc:
+        delete_otp(db, phone)
+        raise HTTPException(status_code=exc.status_code, detail=exc.user_message) from exc
+    except Exception as exc:
+        delete_otp(db, phone)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not send verification code by SMS. Try again shortly.",
+        ) from exc
+
+
+def _registration_token_for_phone(db: Session, phone: str) -> str:
+    parent = db.query(Parent).filter(Parent.phone == phone).first()
+    if not parent:
+        parent = Parent(phone=phone, full_name="", match_status=MatchStatus.PENDING)
+        db.add(parent)
+        db.commit()
+        db.refresh(parent)
+    return create_access_token(
+        {"sub": parent.id, "role": "REGISTERING"},
+        expires_delta=timedelta(minutes=settings.jwt_registration_expire_minutes),
+    )
+
+
+@router.post("/parent/login")
+async def parent_login(req: ParentPhoneRequest, db: Session = Depends(get_db)):
+    """Sign in an existing parent with phone only — no OTP required."""
+    phone = req.phone
+    parent = db.query(Parent).filter(Parent.phone == phone).first()
+    if not parent or not _parent_profile_complete(parent):
+        raise HTTPException(
+            status_code=404,
+            detail="No registered account for this number. Please create an account first.",
+        )
+    access_token, refresh_token, _ = _parent_tokens(db, parent)
+    return {
+        "success": True,
+        "data": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "parent": _serialize_parent(db, parent),
+        },
+    }
+
+
+@router.post("/parent/register/send-code")
+async def parent_register_send_code(req: ParentPhoneRequest, db: Session = Depends(get_db)):
+    """Send SMS verification code — registration only (first-time sign-up)."""
+    phone = req.phone
+    parent = db.query(Parent).filter(Parent.phone == phone).first()
+    if parent and _parent_profile_complete(parent):
+        raise HTTPException(
+            status_code=409,
+            detail="This number is already registered. Please sign in instead.",
+        )
+    await _send_phone_verification_code(db, phone)
+    return {
+        "success": True,
+        "data": {
+            "message": f"Verification code sent to {phone}",
+            "expires_in_seconds": settings.otp_expiry_seconds,
+            **({"dry_run": True} if settings.sms_dry_run else {}),
+        },
+    }
+
+
+@router.post("/parent/register/verify-code")
+async def parent_register_verify_code(req: OtpVerifyRequest, db: Session = Depends(get_db)):
+    """Verify SMS code during registration and return a registration session token."""
+    phone = req.phone
+    parent = db.query(Parent).filter(Parent.phone == phone).first()
+    if parent and _parent_profile_complete(parent):
+        raise HTTPException(
+            status_code=409,
+            detail="This number is already registered. Please sign in instead.",
+        )
+
+    stored_otp = fetch_otp(db, phone)
+    if not stored_otp or stored_otp != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+    delete_otp(db, phone)
+
+    reg_token = _registration_token_for_phone(db, phone)
+    return {
+        "success": True,
+        "data": {
+            "registration_token": reg_token,
+            "message": "Phone verified. Complete your registration.",
+        },
+    }
+
+
 @router.post("/web/login")
 async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email, User.is_active == True).first()
@@ -154,101 +262,20 @@ async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/parent/request-otp")
 async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
-    phone = req.phone
-    parent = db.query(Parent).filter(Parent.phone == phone).first()
-    flow = _otp_flow_for_parent(parent)
-
-    if req.purpose == "login" and flow == "REGISTER":
+    """Deprecated — use POST /parent/login or POST /parent/register/send-code."""
+    if req.purpose == "login":
         raise HTTPException(
-            status_code=404,
-            detail="No registered account for this number. Please create an account first.",
+            status_code=400,
+            detail="Use POST /auth/parent/login to sign in. OTP is only required during registration.",
         )
-    if req.purpose == "register" and flow == "LOGIN":
-        raise HTTPException(
-            status_code=409,
-            detail="This number is already registered. Please sign in instead.",
-        )
-
-    code = str(random.randint(100000, 999999))
-    store_otp(db, phone, code)
-    try:
-        await send_verification_code_sms(phone, code)
-    except SmsDeliveryError as exc:
-        delete_otp(db, phone)
-        raise HTTPException(status_code=exc.status_code, detail=exc.user_message) from exc
-    except Exception as exc:
-        delete_otp(db, phone)
-        raise HTTPException(
-            status_code=503,
-            detail="Could not send verification code by SMS. Try again shortly.",
-        ) from exc
-    return {
-        "success": True,
-        "data": {
-            "message": f"Verification code sent to {phone}",
-            "flow": flow,
-            "expires_in_seconds": settings.otp_expiry_seconds,
-            **({"dry_run": True} if settings.sms_dry_run else {}),
-        },
-    }
+    phone_req = ParentPhoneRequest(phone=req.phone)
+    return await parent_register_send_code(phone_req, db)
 
 
 @router.post("/parent/verify-otp")
 async def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
-    phone = req.phone
-    stored_otp = fetch_otp(db, phone)
-    if not stored_otp or stored_otp != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
-    delete_otp(db, phone)
-
-    parent = db.query(Parent).filter(Parent.phone == phone).first()
-    if parent:
-        if parent.match_status == MatchStatus.MATCHED or _parent_profile_complete(parent):
-            access_token, refresh_token, _ = _parent_tokens(db, parent)
-            return {
-                "success": True,
-                "data": {
-                    "flow": "LOGIN",
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "parent": {
-                        "id": parent.id,
-                        "full_name": parent.full_name,
-                        "phone": parent.phone,
-                        "match_status": parent.match_status.value,
-                        "linked_students": _linked_students(db, parent.id),
-                    },
-                },
-            }
-        reg_token = create_access_token(
-            {"sub": parent.id, "role": "REGISTERING"},
-            expires_delta=timedelta(minutes=settings.jwt_registration_expire_minutes),
-        )
-        return {
-            "success": True,
-            "data": {
-                "flow": "REGISTER",
-                "registration_token": reg_token,
-                "message": "Complete registration.",
-            },
-        }
-
-    new_parent = Parent(phone=phone, full_name="", match_status=MatchStatus.PENDING)
-    db.add(new_parent)
-    db.commit()
-    db.refresh(new_parent)
-    reg_token = create_access_token(
-        {"sub": new_parent.id, "role": "REGISTERING"},
-        expires_delta=timedelta(minutes=settings.jwt_registration_expire_minutes),
-    )
-    return {
-        "success": True,
-        "data": {
-            "flow": "REGISTER",
-            "registration_token": reg_token,
-            "message": "Complete registration.",
-        },
-    }
+    """Deprecated — use POST /parent/register/verify-code for registration."""
+    return await parent_register_verify_code(req, db)
 
 
 @router.post("/parent/register")
