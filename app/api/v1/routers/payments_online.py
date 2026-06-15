@@ -21,7 +21,7 @@ from app.services.paystack import (
     paystack_callback_url,
     paystack_is_configured,
 )
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background
 from app.services.dues_balance import student_term_dues_balance, format_payment_sms
 from decimal import Decimal
 from app.services.pdf import generate_receipt
@@ -94,7 +94,7 @@ async def _mark_payment_completed(payment: Payment, db: Session, background_task
             balance_after=balance_after,
             channel="Online payment",
         )
-        background_tasks.add_task(send_sms, parent.phone, message)
+        background_tasks.add_task(send_sms_background, parent.phone, message)
         db.add(
             SmsLog(
                 message_type="PAYMENT_CONFIRMATION",

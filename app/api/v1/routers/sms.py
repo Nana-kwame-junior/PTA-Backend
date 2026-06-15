@@ -7,9 +7,20 @@ from app.core.database import get_db
 from app.core.security import require_role
 from app.models.sms_log import SmsLog
 from app.models.job_record import JobRecord
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background, check_sms_balance
 
 router = APIRouter(prefix="/sms", tags=["SMS"])
+
+
+@router.get("/balance")
+async def sms_balance(admin=Depends(require_role("ADMIN"))):
+    """Check mNotify SMS credit balance (admin debug)."""
+    try:
+        data = await check_sms_balance()
+        return {"success": True, "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
 
 @router.get("/logs")
 async def sms_logs(
@@ -57,7 +68,7 @@ async def resend_failed_sms(
     # Here we just resend all failed logs
     failed_logs = db.query(SmsLog).filter(SmsLog.status == "FAILED").all()
     for log in failed_logs:
-        background_tasks.add_task(send_sms, log.recipient_phone, log.content)
+        background_tasks.add_task(send_sms_background, log.recipient_phone, log.content)
         log.status = "QUEUED"
     db.commit()
     return {"success": True, "data": {"message": f"Resend queued for {len(failed_logs)} messages"}}

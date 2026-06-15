@@ -18,7 +18,7 @@ from app.models.sms_log import SmsLog
 from app.models.parent_student_link import ParentStudentLink
 from app.models.parent import Parent
 from app.schemas.payment import ManualPaymentRequest, ManualPaymentUpdate, AmendmentRequest, FlagPaymentRequest
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background
 from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse
@@ -131,7 +131,7 @@ async def record_manual_payment(
             channel="Manual payment",
         )
         for phone in parent_phones:
-            background_tasks.add_task(send_sms, phone, sms_body)
+            background_tasks.add_task(send_sms_background, phone, sms_body)
             db.add(
                 SmsLog(
                     message_type="MANUAL_PAYMENT",

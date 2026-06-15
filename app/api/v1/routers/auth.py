@@ -10,7 +10,8 @@ from app.core.security import (
     get_current_user,
     require_registration_token,
 )
-from app.services.sms import send_otp_sms
+from app.services.sms import send_verification_code_sms
+from app.services.sms_errors import SmsDeliveryError
 from app.services.otp_store import store_otp, fetch_otp, delete_otp
 from app.services.matching import find_matches
 from app.models.parent import Parent, MatchStatus
@@ -143,19 +144,26 @@ async def request_otp(req: OtpRequest, db: Session = Depends(get_db)):
     phone = req.phone
     parent = db.query(Parent).filter(Parent.phone == phone).first()
     flow = "LOGIN" if parent and parent.match_status == MatchStatus.MATCHED else "REGISTER"
-    otp = str(random.randint(100000, 999999))
-    store_otp(db, phone, otp)
+    code = str(random.randint(100000, 999999))
+    store_otp(db, phone, code)
     try:
-        await send_otp_sms(phone, otp)
+        await send_verification_code_sms(phone, code)
+    except SmsDeliveryError as exc:
+        delete_otp(db, phone)
+        raise HTTPException(status_code=exc.status_code, detail=exc.user_message) from exc
     except Exception as exc:
         delete_otp(db, phone)
-        raise HTTPException(status_code=503, detail="Could not send OTP SMS. Try again shortly.") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Could not send verification code by SMS. Try again shortly.",
+        ) from exc
     return {
         "success": True,
         "data": {
-            "message": f"OTP sent to {phone}",
+            "message": f"Verification code sent to {phone}",
             "flow": flow,
             "expires_in_seconds": settings.otp_expiry_seconds,
+            **({"dry_run": True} if settings.sms_dry_run else {}),
         },
     }
 
@@ -165,7 +173,7 @@ async def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
     phone = req.phone
     stored_otp = fetch_otp(db, phone)
     if not stored_otp or stored_otp != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
     delete_otp(db, phone)
 
     parent = db.query(Parent).filter(Parent.phone == phone).first()

@@ -14,7 +14,7 @@ from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.meeting import AttendanceRecord
 from app.schemas.report import FollowupSmsRequest
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background
 
 router = APIRouter(prefix="/meetings", tags=["Attendance"])
 
@@ -143,7 +143,7 @@ async def send_attendance_followup(
     # Send SMS using template
     for phone in parent_phones:
         message = req.custom_message  # In real, replace placeholders
-        background_tasks.add_task(send_sms, phone, message)
+        background_tasks.add_task(send_sms_background, phone, message)
         sms_log = SmsLog(message_type="ATTENDANCE_FOLLOWUP", recipient_phone=phone, content=message, status="QUEUED")
         db.add(sms_log)
     db.commit()

@@ -9,7 +9,7 @@ from app.models.announcement import Announcement, AnnouncementType
 from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.announcement import AnnouncementCreate
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background
 from app.services.activity_log import log_staff_activity
 
 router = APIRouter(prefix="/announcements", tags=["Announcements"])
@@ -39,7 +39,7 @@ async def create_announcement(
         # Truncate message if needed (SMS limit ~160 chars)
         sms_body = f"{req.title}: {req.body[:140]}... — Mawuli SHS PTA"
         for phone in phones:
-            background_tasks.add_task(send_sms, phone, sms_body)
+            background_tasks.add_task(send_sms_background, phone, sms_body)
             sms_log = SmsLog(
                 message_type="ANNOUNCEMENT",
                 recipient_phone=phone,

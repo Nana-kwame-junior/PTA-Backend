@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     sms_provider: str = "MNOTIFY"
     mnotify_api_key: str = ""
     mnotify_sender_id: str = "MawuliPTA"
+    # Staging only: log verification codes in server logs instead of sending SMS
+    sms_dry_run: bool = False
 
     # ── Email (staff invitations) ──────────────────────────────────
     # Supports both SMTP_* and MAIL_* env names (Gmail app passwords).

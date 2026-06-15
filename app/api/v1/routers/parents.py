@@ -10,7 +10,7 @@ from app.models.pending_match import PendingMatch
 from app.models.student import Student
 from app.models.parent_student_link import ParentStudentLink
 from app.models.sms_log import SmsLog
-from app.services.sms import send_sms
+from app.services.sms import send_sms_background
 
 router = APIRouter(prefix="/admin/pending-matches", tags=["Parent Matching"])
 
@@ -72,7 +72,7 @@ async def approve_pending_match(
     # Send SMS to parent
     if parent and parent.phone:
         message = f"Your Mawuli SHS PTA account has been verified. You can now log in to view your ward's details. — Mawuli SHS PTA"
-        background_tasks.add_task(send_sms, parent.phone, message)
+        background_tasks.add_task(send_sms_background, parent.phone, message)
         sms_log = SmsLog(message_type="MATCH_APPROVED", recipient_phone=parent.phone, content=message, status="QUEUED")
         db.add(sms_log)
         db.commit()
@@ -97,7 +97,7 @@ async def reject_pending_match(
     if parent and parent.phone:
         reason = req.get("reason", "No reason provided")
         message = f"Your parent account could not be verified: {reason}. Please contact the school for assistance. — Mawuli SHS PTA"
-        background_tasks.add_task(send_sms, parent.phone, message)
+        background_tasks.add_task(send_sms_background, parent.phone, message)
         sms_log = SmsLog(message_type="MATCH_REJECTED", recipient_phone=parent.phone, content=message, status="QUEUED")
         db.add(sms_log)
         db.commit()
