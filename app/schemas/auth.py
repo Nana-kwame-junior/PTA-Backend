@@ -96,6 +96,12 @@ class ParentRegisterRequest(BaseModel):
     ward_stream: Optional[str] = None
 
 
+class LinkWardRequest(BaseModel):
+    ward_name: str
+    ward_form: str
+    ward_index_number: Optional[str] = None
+    ward_stream: Optional[str] = None
+
 
 class SelectCandidateRequest(BaseModel):
 

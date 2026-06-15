@@ -28,6 +28,7 @@ from app.schemas.auth import (
     OtpVerifyRequest,
     ParentPhoneRequest,
     ParentRegisterRequest,
+    LinkWardRequest,
     SelectCandidateRequest,
     RefreshTokenRequest,
     ForgotPasswordRequest,
@@ -136,6 +137,70 @@ def _serialize_parent(db: Session, parent: Parent) -> dict:
         "phone": parent.phone,
         "match_status": parent.match_status.value,
         "linked_students": _linked_students(db, parent.id),
+    }
+
+
+def _process_ward_match(
+    db: Session,
+    parent: Parent,
+    ward_name: str,
+    ward_form: str,
+    ward_index_number: str | None,
+    ward_stream: str | None,
+):
+    """Run matching algorithm and return registration response payload."""
+    try:
+        ward_index, ward_stream_norm, _ = validate_student_fields(
+            db,
+            ward_form,
+            ward_index_number,
+            ward_stream,
+            require_index=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    matches = find_matches(
+        parent,
+        db,
+        ward_name,
+        ward_form,
+        ward_index,
+        ward_stream_norm,
+    )
+    candidates = _serialize_candidates(matches)
+
+    if len(matches) == 1 and matches[0]["score"] >= settings.match_auto_threshold:
+        top = matches[0]
+        return {
+            "match_result": "AUTO_MATCHED",
+            "student_id": str(top["student"].id),
+            "message": "We found a strong match for your ward.",
+            "candidates": candidates,
+        }
+
+    if matches and matches[0]["score"] >= settings.match_candidate_threshold:
+        return {
+            "match_result": "MULTIPLE_CANDIDATES",
+            "message": "Please confirm this is your ward."
+            if len(matches) == 1
+            else "Multiple possible matches found. Select your ward.",
+            "candidates": candidates,
+        }
+
+    pending = PendingMatch(
+        parent_id=parent.id,
+        entered_ward_name=ward_name,
+        entered_ward_form=ward_form,
+        entered_index_number=ward_index,
+        top_candidates=json.dumps(candidates),
+    )
+    db.add(pending)
+    db.commit()
+    return {
+        "match_result": "PENDING_ADMIN_REVIEW",
+        "message": "No automatic match found. An admin will review your registration.",
+        "candidates": candidates,
     }
 
 
@@ -293,74 +358,40 @@ async def parent_register(
     parent.relationship = req.relationship
     db.commit()
 
-    try:
-        ward_index, ward_stream, _ = validate_student_fields(
-            db,
-            req.ward_form,
-            req.ward_index_number,
-            req.ward_stream,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    matches = find_matches(
-        parent,
+    result = _process_ward_match(
         db,
+        parent,
         req.ward_name,
         req.ward_form,
-        ward_index,
-        ward_stream,
+        req.ward_index_number,
+        req.ward_stream,
     )
-    candidates = _serialize_candidates(matches)
+    return {"success": True, "data": result}
 
-    if len(matches) == 1 and matches[0]["score"] >= settings.match_auto_threshold:
-        top = matches[0]
-        return {
-            "success": True,
-            "data": {
-                "match_result": "AUTO_MATCHED",
-                "student_id": str(top["student"].id),
-                "message": "We found a strong match for your ward.",
-                "candidates": candidates,
-            },
-        }
 
-    if matches and matches[0]["score"] >= settings.match_candidate_threshold:
-        if len(matches) == 1:
-            return {
-                "success": True,
-                "data": {
-                    "match_result": "MULTIPLE_CANDIDATES",
-                    "message": "Please confirm this is your ward.",
-                    "candidates": candidates,
-                },
-            }
-        return {
-            "success": True,
-            "data": {
-                "match_result": "MULTIPLE_CANDIDATES",
-                "message": "Multiple possible matches found. Select your ward.",
-                "candidates": candidates,
-            },
-        }
+@router.post("/parent/link-ward")
+async def link_additional_ward(
+    req: LinkWardRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Link another ward to an already registered parent account."""
+    if current_user["role"] != "PARENT":
+        raise HTTPException(status_code=403, detail="Only parents can access")
 
-    pending = PendingMatch(
-        parent_id=parent.id,
-        entered_ward_name=req.ward_name,
-        entered_ward_form=req.ward_form,
-        entered_index_number=ward_index,
-        top_candidates=json.dumps(candidates),
+    parent = db.query(Parent).filter(Parent.id == current_user["id"]).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent not found")
+
+    result = _process_ward_match(
+        db,
+        parent,
+        req.ward_name,
+        req.ward_form,
+        req.ward_index_number,
+        req.ward_stream,
     )
-    db.add(pending)
-    db.commit()
-    return {
-        "success": True,
-        "data": {
-            "match_result": "PENDING_ADMIN_REVIEW",
-            "message": "No automatic match found. An admin will review your registration.",
-            "candidates": candidates,
-        },
-    }
+    return {"success": True, "data": result}
 
 
 @router.post("/parent/select-candidate")
@@ -374,23 +405,28 @@ async def select_candidate(
     if not parent:
         raise HTTPException(status_code=404, detail="Parent not found")
 
-    student = db.query(Student).filter(Student.id == str(req.student_id)).first()
+    data = _link_parent_to_student(db, parent, str(req.student_id))
+    return {"success": True, "data": data}
+
+
+def _link_parent_to_student(db: Session, parent: Parent, student_id: str) -> dict:
+    student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     existing = (
         db.query(ParentStudentLink)
         .filter(
-            ParentStudentLink.parent_id == parent_id,
-            ParentStudentLink.student_id == str(req.student_id),
+            ParentStudentLink.parent_id == parent.id,
+            ParentStudentLink.student_id == str(student_id),
         )
         .first()
     )
     if not existing:
         db.add(
             ParentStudentLink(
-                parent_id=parent_id,
-                student_id=str(req.student_id),
+                parent_id=parent.id,
+                student_id=str(student_id),
                 relationship=parent.relationship,
                 confidence_score=100,
             )
@@ -399,22 +435,28 @@ async def select_candidate(
     parent.match_status = MatchStatus.MATCHED
     db.commit()
     db.refresh(parent)
-
     access_token, refresh_token, _ = _parent_tokens(db, parent)
     return {
-        "success": True,
-        "data": {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "message": "Successfully linked to your ward.",
-            "parent": {
-                "id": parent.id,
-                "full_name": parent.full_name,
-                "phone": parent.phone,
-                "linked_students": _linked_students(db, parent.id),
-            },
-        },
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "message": "Successfully linked to your ward.",
+        "parent": _serialize_parent(db, parent),
     }
+
+
+@router.post("/parent/confirm-ward")
+async def confirm_ward_link(
+    req: SelectCandidateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user["role"] != "PARENT":
+        raise HTTPException(status_code=403, detail="Only parents can access")
+    parent = db.query(Parent).filter(Parent.id == current_user["id"]).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent not found")
+    data = _link_parent_to_student(db, parent, str(req.student_id))
+    return {"success": True, "data": data}
 
 
 @router.get("/parent/me")

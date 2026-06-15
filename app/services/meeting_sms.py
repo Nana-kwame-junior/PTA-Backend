@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.meeting import Meeting, MeetingStatus
-from app.models.parent import MatchStatus, Parent
+from app.services.parent_directory import meeting_recipient_phones
 from app.models.sms_log import SmsLog
 from app.services.sms import schedule_sms
 
@@ -19,11 +19,6 @@ REMINDER_SCHEDULE = [
     ("D3", 3, 9, 0),
     ("D0", 0, 7, 0),
 ]
-
-
-def _parent_phones(db: Session) -> list[str]:
-    parents = db.query(Parent).filter(Parent.match_status == MatchStatus.MATCHED).all()
-    return list(dict.fromkeys(p.phone for p in parents if p.phone))
 
 
 def _reminder_message(meeting: Meeting, reminder_type: str) -> str:
@@ -41,7 +36,7 @@ async def schedule_meeting_reminders(db: Session, meeting: Meeting) -> None:
     if meeting.status != MeetingStatus.SCHEDULED:
         return
 
-    phones = _parent_phones(db)
+    phones = meeting_recipient_phones(db)
     if not phones:
         return
 

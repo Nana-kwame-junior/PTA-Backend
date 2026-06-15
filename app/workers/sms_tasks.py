@@ -11,13 +11,13 @@ from app.models.payment import Payment
 from app.models.manual_payment import ManualPayment
 from app.models.sms_log import SmsLog
 from app.services.sms import send_sms_sync
+from app.services.parent_directory import meeting_recipient_phones
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 def get_distinct_parent_phones(db: Session) -> list:
-    parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
-    return [p.phone for p in parents if p.phone]
+    return meeting_recipient_phones(db)
 
 def get_parents_for_student(db: Session, student_id: str) -> list:
     links = db.query(ParentStudentLink).filter(ParentStudentLink.student_id == student_id).all()

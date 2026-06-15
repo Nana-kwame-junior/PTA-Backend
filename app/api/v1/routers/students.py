@@ -142,6 +142,22 @@ async def list_students(
     }
 
 
+@router.get("/detail/{student_id}")
+async def get_student_detail(
+    student_id: UUID,
+    db: Session = Depends(get_db),
+    staff=Depends(require_permission("students")),
+):
+    from app.services.parent_directory import linked_parents_for_student
+
+    student = db.query(Student).filter(Student.id == str(student_id)).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    data = _serialize_student(student)
+    data["linked_parents"] = linked_parents_for_student(db, student.id)
+    return {"success": True, "data": data}
+
+
 @router.get("/{index_number}")
 async def get_student_by_index(
     index_number: str,

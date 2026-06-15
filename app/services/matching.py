@@ -1,7 +1,14 @@
 from rapidfuzz import fuzz
 from sqlalchemy.orm import Session
-from app.models.student import Student
+
 from app.models.parent import Parent
+from app.models.parent_student_link import ParentStudentLink
+from app.models.student import Student
+
+
+def _already_linked_student_ids(db: Session, parent_id: str) -> set[str]:
+    links = db.query(ParentStudentLink).filter(ParentStudentLink.parent_id == parent_id).all()
+    return {link.student_id for link in links}
 
 
 def match_parent_to_student(
@@ -18,7 +25,6 @@ def match_parent_to_student(
                 if entered_stream.strip().lower() != student.stream.strip().lower():
                     return 85
             return 100
-        return 0
 
     score = 0
     name_score = fuzz.token_sort_ratio(entered_ward_name, student.full_name)
@@ -33,7 +39,7 @@ def match_parent_to_student(
     if parent_last and student_last and parent_last.lower() == student_last.lower():
         score += 20
     if parent.phone in [student.parent_phone_1, student.parent_phone_2]:
-        score += 10
+        score += 15
     return min(score, 100)
 
 
@@ -42,15 +48,29 @@ def find_matches(
     db: Session,
     entered_ward_name: str,
     entered_ward_form: str,
-    entered_index_number: str = None,
-    entered_stream: str = None,
+    entered_index_number: str | None = None,
+    entered_stream: str | None = None,
 ):
+    """Find ward candidates. Skips students already linked to this parent."""
+    linked_ids = _already_linked_student_ids(db, parent.id)
     candidates = []
     students = db.query(Student).filter(Student.is_active == True).all()
+
+    if entered_index_number:
+        exact = [
+            s
+            for s in students
+            if s.index_number
+            and s.index_number == entered_index_number.strip()
+            and s.id not in linked_ids
+        ]
+        if len(exact) == 1:
+            return [{"student": exact[0], "score": 100}]
+        if len(exact) > 1:
+            return [{"student": s, "score": 95} for s in exact[:5]]
+
     for student in students:
-        if entered_index_number and student.index_number:
-            if student.index_number == entered_index_number.strip():
-                return [{"student": student, "score": 100}]
+        if student.id in linked_ids:
             continue
         score = match_parent_to_student(
             parent,
@@ -62,5 +82,6 @@ def find_matches(
         )
         if score >= 40:
             candidates.append({"student": student, "score": score})
+
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates[:5]
