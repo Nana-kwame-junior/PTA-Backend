@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_expire_minutes: int = 480
     jwt_refresh_expire_days: int = 30
-    jwt_registration_expire_minutes: int = 10
+    jwt_registration_expire_minutes: int = 1440
     jwt_selection_expire_minutes: int = 5
 
     # ── OTP ────────────────────────────────────────────────────────

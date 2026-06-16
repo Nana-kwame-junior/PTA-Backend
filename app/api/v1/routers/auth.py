@@ -302,6 +302,31 @@ async def parent_register_verify_code(req: OtpVerifyRequest, db: Session = Depen
     }
 
 
+@router.post("/parent/register/resume-session")
+async def parent_register_resume_session(req: ParentPhoneRequest, db: Session = Depends(get_db)):
+    """Re-issue a registration token after app reload — phone must have passed OTP earlier."""
+    phone = req.phone
+    parent = db.query(Parent).filter(Parent.phone == phone).first()
+    if not parent:
+        raise HTTPException(
+            status_code=404,
+            detail="No registration in progress for this number. Verify your phone to continue.",
+        )
+    if _parent_profile_complete(parent):
+        raise HTTPException(
+            status_code=409,
+            detail="This number is already registered. Please sign in instead.",
+        )
+    reg_token = _registration_token_for_phone(db, phone)
+    return {
+        "success": True,
+        "data": {
+            "registration_token": reg_token,
+            "message": "Registration session restored. Continue where you left off.",
+        },
+    }
+
+
 @router.post("/web/login")
 async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email, User.is_active == True).first()
