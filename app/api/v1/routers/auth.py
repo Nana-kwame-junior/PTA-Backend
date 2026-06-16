@@ -84,6 +84,43 @@ async def parent_registration_class_levels(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/parent/students/search")
+async def search_students_for_registration(
+    name: str,
+    form: str | None = None,
+    payload=Depends(require_registration_token),
+    db: Session = Depends(get_db),
+):
+    """Search active students by name while completing registration."""
+    query_text = (name or "").strip()
+    if len(query_text) < 2:
+        return {"success": True, "data": {"students": []}}
+
+    query = db.query(Student).filter(
+        Student.is_active == True,
+        Student.full_name.ilike(f"%{query_text}%"),
+    )
+    if form and form.strip():
+        query = query.filter(Student.form.ilike(form.strip()))
+
+    rows = query.order_by(Student.full_name.asc()).limit(10).all()
+    return {
+        "success": True,
+        "data": {
+            "students": [
+                {
+                    "id": str(row.id),
+                    "full_name": row.full_name,
+                    "index_number": row.index_number,
+                    "form": row.form,
+                    "stream": row.stream,
+                }
+                for row in rows
+            ]
+        },
+    }
+
+
 def _serialize_candidates(matches):
     return [
         {
@@ -400,15 +437,20 @@ async def parent_register(
 
     ward_results = []
     for ward in wards:
+        result = _process_ward_match(
+            db,
+            parent,
+            ward.ward_name,
+            ward.ward_form,
+            ward.ward_index_number,
+            ward.ward_stream,
+        )
         ward_results.append(
-            _process_ward_match(
-                db,
-                parent,
-                ward.ward_name,
-                ward.ward_form,
-                ward.ward_index_number,
-                ward.ward_stream,
-            )
+            {
+                **result,
+                "ward_name": ward.ward_name,
+                "ward_form": ward.ward_form,
+            }
         )
 
     auto_ids = [
