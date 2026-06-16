@@ -28,6 +28,7 @@ from app.schemas.auth import (
     OtpVerifyRequest,
     ParentPhoneRequest,
     ParentRegisterRequest,
+    WardRegisterEntry,
     LinkWardRequest,
     SelectCandidateRequest,
     RefreshTokenRequest,
@@ -354,19 +355,98 @@ async def parent_register(
     if not parent:
         raise HTTPException(status_code=404, detail="Parent not found")
 
+    if req.wards:
+        wards = req.wards
+    elif req.ward_name and req.ward_form:
+        wards = [
+            WardRegisterEntry(
+                ward_name=req.ward_name,
+                ward_form=req.ward_form,
+                ward_index_number=req.ward_index_number,
+                ward_stream=req.ward_stream,
+            )
+        ]
+    else:
+        raise HTTPException(status_code=400, detail="Add at least one ward")
+
     parent.full_name = req.full_name
     parent.relationship = req.relationship
     db.commit()
 
-    result = _process_ward_match(
-        db,
-        parent,
-        req.ward_name,
-        req.ward_form,
-        req.ward_index_number,
-        req.ward_stream,
-    )
-    return {"success": True, "data": result}
+    ward_results = []
+    for ward in wards:
+        ward_results.append(
+            _process_ward_match(
+                db,
+                parent,
+                ward.ward_name,
+                ward.ward_form,
+                ward.ward_index_number,
+                ward.ward_stream,
+            )
+        )
+
+    auto_ids = [
+        r["student_id"]
+        for r in ward_results
+        if r.get("match_result") == "AUTO_MATCHED" and r.get("student_id")
+    ]
+    for student_id in auto_ids:
+        _attach_student_link(db, parent, str(student_id))
+    if auto_ids:
+        db.commit()
+        db.refresh(parent)
+
+    session_payload = {}
+    if parent.match_status == MatchStatus.MATCHED:
+        access_token, refresh_token, _ = _parent_tokens(db, parent)
+        session_payload = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "parent": _serialize_parent(db, parent),
+        }
+
+    if len(ward_results) == 1:
+        data = {**ward_results[0], **session_payload}
+        return {"success": True, "data": data}
+
+    any_pending = any(r.get("match_result") == "PENDING_ADMIN_REVIEW" for r in ward_results)
+    needs_pick = any(r.get("match_result") == "MULTIPLE_CANDIDATES" for r in ward_results)
+
+    if parent.match_status == MatchStatus.MATCHED and not needs_pick:
+        return {
+            "success": True,
+            "data": {
+                "match_result": "AUTO_MATCHED",
+                "message": f"Linked {len(auto_ids)} ward(s) successfully.",
+                "ward_results": ward_results,
+                **session_payload,
+            },
+        }
+
+    if any_pending and not needs_pick and not auto_ids:
+        return {
+            "success": True,
+            "data": {
+                **ward_results[0],
+                "ward_results": ward_results,
+            },
+        }
+
+    merged_candidates = []
+    for i, result in enumerate(ward_results):
+        for candidate in result.get("candidates") or []:
+            merged_candidates.append({**candidate, "ward_index": i, "ward_name": wards[i].ward_name})
+
+    return {
+        "success": True,
+        "data": {
+            "match_result": "MULTI_WARD" if len(ward_results) > 1 else ward_results[0].get("match_result"),
+            "message": "Please confirm your ward(s)." if needs_pick else ward_results[0].get("message", ""),
+            "candidates": merged_candidates or ward_results[0].get("candidates"),
+            "ward_results": ward_results,
+        },
+    }
 
 
 @router.post("/parent/link-ward")
@@ -409,7 +489,7 @@ async def select_candidate(
     return {"success": True, "data": data}
 
 
-def _link_parent_to_student(db: Session, parent: Parent, student_id: str) -> dict:
+def _attach_student_link(db: Session, parent: Parent, student_id: str) -> None:
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -433,6 +513,10 @@ def _link_parent_to_student(db: Session, parent: Parent, student_id: str) -> dic
         )
 
     parent.match_status = MatchStatus.MATCHED
+
+
+def _link_parent_to_student(db: Session, parent: Parent, student_id: str) -> dict:
+    _attach_student_link(db, parent, student_id)
     db.commit()
     db.refresh(parent)
     access_token, refresh_token, _ = _parent_tokens(db, parent)

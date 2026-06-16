@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, EmailStr, field_validator
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 from uuid import UUID
 
@@ -81,19 +81,21 @@ class OtpVerifyRequest(BaseModel):
 
 
 
-class ParentRegisterRequest(BaseModel):
-
-    full_name: str
-
-    relationship: str
-
+class WardRegisterEntry(BaseModel):
     ward_name: str
-
     ward_form: str
-
     ward_index_number: Optional[str] = None
-
     ward_stream: Optional[str] = None
+
+
+class ParentRegisterRequest(BaseModel):
+    full_name: str
+    relationship: str
+    ward_name: Optional[str] = None
+    ward_form: Optional[str] = None
+    ward_index_number: Optional[str] = None
+    ward_stream: Optional[str] = None
+    wards: Optional[List[WardRegisterEntry]] = None
 
 
 class LinkWardRequest(BaseModel):
