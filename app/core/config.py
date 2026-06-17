@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     jwt_selection_expire_minutes: int = 5
 
     # ── OTP ────────────────────────────────────────────────────────
-    otp_expiry_seconds: int = 600
+    otp_expiry_seconds: int = 180
     otp_max_attempts: int = 3
     otp_lockout_minutes: int = 15
 
