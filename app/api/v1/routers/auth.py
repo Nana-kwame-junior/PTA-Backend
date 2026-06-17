@@ -323,6 +323,8 @@ async def parent_register_verify_code(req: OtpVerifyRequest, db: Session = Depen
             status_code=409,
             detail="This number is already registered. Please sign in instead.",
         )
+
+    stored_otp = fetch_otp(db, phone)
     if not stored_otp or stored_otp != req.otp:
         raise HTTPException(status_code=400, detail="Invalid or expired verification code")
     delete_otp(db, phone)
