@@ -12,7 +12,7 @@ from app.models.class_level import ClassLevel
 
 ACADEMIC_YEAR = "2024/2025"
 
-# PTA covers KG → Primary → JHS → SHS only (no Nursery/Crèche).
+# PTA covers KG → Primary → JHS only (no Form/SHS levels).
 DEFAULT_CLASS_LEVELS = [
     {"name": "KG", "sequence": 1, "requires_index_number": False, "requires_stream": False},
     {"name": "Primary 1", "sequence": 2, "requires_index_number": False, "requires_stream": False},
@@ -21,12 +21,9 @@ DEFAULT_CLASS_LEVELS = [
     {"name": "Primary 4", "sequence": 5, "requires_index_number": False, "requires_stream": False},
     {"name": "Primary 5", "sequence": 6, "requires_index_number": False, "requires_stream": False},
     {"name": "Primary 6", "sequence": 7, "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 1", "sequence": 8, "requires_index_number": True, "requires_stream": False},
-    {"name": "JHS 2", "sequence": 9, "requires_index_number": True, "requires_stream": False},
-    {"name": "JHS 3", "sequence": 10, "requires_index_number": True, "requires_stream": False},
-    {"name": "Form 1", "sequence": 11, "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 2", "sequence": 12, "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 3", "sequence": 13, "is_terminal": True, "requires_index_number": True, "requires_stream": True},
+    {"name": "JHS 1", "sequence": 8, "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 2", "sequence": 9, "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 3", "sequence": 10, "is_terminal": True, "requires_index_number": True, "requires_stream": False},
 ]
 
 # Wards for mobile parent registration testing (parent records are created via the app).
@@ -59,16 +56,16 @@ STUDENTS = [
         "index_number": "0111025099",
         "full_name": "Efua Darko",
         "gender": "F",
-        "form": "Form 2",
-        "stream": "General Arts",
+        "form": "JHS 3",
+        "stream": None,
         "parent_phone_1": "+233501234567",
     },
     {
-        "index_number": "0111025100",
+        "index_number": None,
         "full_name": "Kofi Mensah",
         "gender": "M",
-        "form": "Form 1",
-        "stream": "Science",
+        "form": "JHS 1",
+        "stream": None,
         "parent_phone_1": "+233244567890",
     },
 ]
@@ -89,10 +86,10 @@ Scenario B — JHS ward (10-digit BECE index):
   Ward class: JHS 2
   Index: 0111025007
 
-Scenario C — SHS ward (index + programme):
+Scenario C — JHS 3 ward (10-digit BECE index):
   Phone: +233501234567
   Ward name: Efua Darko
-  Ward class: Form 2
+  Ward class: JHS 3
   Index: 0111025099
 
 Use OTP from SMS (or Redis in dev) after POST /auth/parent/request-otp.

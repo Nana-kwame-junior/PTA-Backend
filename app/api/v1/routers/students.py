@@ -33,8 +33,9 @@ SAMPLE_CSV = (
     "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
     ",Ama Adjei,F,KG,,+233241234567,\n"
     ",Kwame Adjei,M,Primary 2,,+233241234567,\n"
+    ",Kofi Mensah,M,JHS 1,,+233244567890,\n"
     "0111025007,Yaw Ofori,M,JHS 2,,+233551234567,\n"
-    "0111025099,Efua Darko,F,Form 2,General Arts,+233501234567,\n"
+    "0111025099,Efua Darko,F,JHS 3,,+233501234567,\n"
 )
 
 

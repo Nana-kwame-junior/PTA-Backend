@@ -6,10 +6,10 @@ from datetime import datetime
 
 class ClassLevel(Base):
     """
-    PTA class levels (KG through SHS).
-    KG–Primary: no BECE index, no single programme.
-    JHS: BECE index required, no programme.
-    SHS (Form 1–3): BECE index + programme/stream required.
+    PTA class levels (KG through JHS 3).
+    KG–Primary: no BECE index, no programme.
+    JHS 1–2: no index required.
+    JHS 3: BECE index required; terminal graduation level.
     """
 
     __tablename__ = "class_levels"

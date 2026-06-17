@@ -1,4 +1,4 @@
-"""Validate student fields against PTA class-level rules (Ghana KG–JHS–SHS)."""
+"""Validate student fields against PTA class-level rules (Ghana KG–JHS)."""
 
 import re
 
@@ -46,10 +46,10 @@ def validate_student_fields(
     """
     Returns normalized (index_number, stream, gender).
     KG–Primary: no index, no stream.
-    JHS: 10-digit BECE index, no stream.
-    SHS (Form 1–3): 10-digit index + programme/stream.
+    JHS 1–2: no index required.
+    JHS 3: 10-digit BECE index when required by class level config.
 
-    Parent registration may pass require_index=False so index is optional even for SHS/JHS.
+    Parent registration may pass require_index=False so index is optional even for JHS 3.
     """
     level = get_class_level(db, form)
 
