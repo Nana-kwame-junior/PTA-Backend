@@ -3,10 +3,24 @@
 import re
 
 GHANA_LOCAL_RE = re.compile(r"^[235]\d{8}$")
+SCI_NOTATION_RE = re.compile(r"^\d*\.?\d+[eE][+\-]?\d+$")
 
 
 class PhoneValidationError(ValueError):
     pass
+
+
+def _extract_digits(raw: str) -> str:
+    """Pull digits from text; expand Excel scientific notation (e.g. 2.33596907202E+11)."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if SCI_NOTATION_RE.match(text):
+        try:
+            return str(int(float(text)))
+        except (ValueError, OverflowError):
+            pass
+    return re.sub(r"\D", "", text)
 
 
 def _local_subscriber_digits(digits: str) -> str:
@@ -24,7 +38,7 @@ def normalize_ghana_phone(raw: str) -> str:
     Normalize any Ghana input to E.164 (+233XXXXXXXXX).
     Adds country code +233 when only the 9-digit local mobile is present.
     """
-    digits = re.sub(r"\D", "", raw or "")
+    digits = _extract_digits(raw)
     if not digits:
         raise PhoneValidationError("Phone number is required")
 

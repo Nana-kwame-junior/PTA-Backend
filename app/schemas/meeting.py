@@ -1,7 +1,10 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal
 from uuid import UUID
+
+MeetingStatusLiteral = Literal["SCHEDULED", "COMPLETED", "CANCELLED"]
+MeetingCategoryLiteral = Literal["GENERAL", "URGENT", "FINANCIAL", "EVENT"]
 
 class MeetingCreate(BaseModel):
     title: str
@@ -11,6 +14,8 @@ class MeetingCreate(BaseModel):
     agenda: str
     term: str
     academic_year: str
+    category: MeetingCategoryLiteral = "GENERAL"
+    status: MeetingStatusLiteral = "SCHEDULED"
 
 class MeetingUpdate(BaseModel):
     title: Optional[str] = None
@@ -20,6 +25,7 @@ class MeetingUpdate(BaseModel):
     agenda: Optional[str] = None
     term: Optional[str] = None
     academic_year: Optional[str] = None
+    category: Optional[MeetingCategoryLiteral] = None
 
 class MeetingCancel(BaseModel):
     reason: str

@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, DateTime, Text, Enum as SQLEnum, Boolean
 from app.core.database import Base
+from app.models.announcement import AnnouncementType
 import uuid
 from datetime import datetime
 import enum
@@ -19,6 +20,7 @@ class Meeting(Base):
     agenda = Column(Text)
     term = Column(String(20))
     academic_year = Column(String(20))
+    category = Column(SQLEnum(AnnouncementType), default=AnnouncementType.GENERAL)
     status = Column(SQLEnum(MeetingStatus), default=MeetingStatus.SCHEDULED)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

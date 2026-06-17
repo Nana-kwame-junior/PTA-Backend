@@ -1,6 +1,9 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Optional
+from pydantic import model_validator
+
+from app.core.redis_url import ensure_rediss_ssl
 
 
 class Settings(BaseSettings):
@@ -85,6 +88,13 @@ class Settings(BaseSettings):
     current_academic_year: str = "2024/2025"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _normalize_redis_urls(self):
+        self.redis_url = ensure_rediss_ssl(self.redis_url)
+        self.celery_broker_url = ensure_rediss_ssl(self.celery_broker_url)
+        self.celery_result_backend = ensure_rediss_ssl(self.celery_result_backend)
+        return self
 
     @property
     def resolved_smtp_user(self) -> str:

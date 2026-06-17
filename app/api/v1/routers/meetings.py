@@ -8,6 +8,7 @@ import json
 from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission
 from app.models.meeting import Meeting, MeetingStatus
+from app.models.announcement import AnnouncementType
 from app.models.job_record import JobRecord
 from app.models.parent import Parent
 from app.models.sms_log import SmsLog
@@ -19,6 +20,22 @@ from app.workers.sms_tasks import send_meeting_reminder
 from app.services.task_queue import safe_apply_async
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
+
+
+def _serialize_meeting(meeting: Meeting) -> dict:
+    return {
+        "id": str(meeting.id),
+        "title": meeting.title,
+        "date": meeting.date.isoformat(),
+        "time": meeting.time,
+        "venue": meeting.venue,
+        "agenda": meeting.agenda,
+        "term": meeting.term,
+        "academic_year": meeting.academic_year,
+        "category": meeting.category.value if meeting.category else "GENERAL",
+        "status": meeting.status.value,
+    }
+
 
 def cancel_meeting_jobs(meeting_id: str, db: Session):
     # In production, you would cancel Celery tasks using task id stored in JobRecord
@@ -55,6 +72,20 @@ async def create_meeting(
         action_label=f"Scheduled meeting: {meeting.title}",
         details=meeting.date.strftime("%d %b %Y"),
     )
+
+    if meeting.status != MeetingStatus.SCHEDULED:
+        return {
+            "success": True,
+            "data": {
+                "id": str(meeting.id),
+                "title": meeting.title,
+                "date": meeting.date.isoformat(),
+                "time": meeting.time,
+                "venue": meeting.venue,
+                "status": meeting.status.value,
+                "sms_jobs": None,
+            },
+        }
 
     # Schedule Celery tasks
     # D7
@@ -227,11 +258,14 @@ async def list_meetings(
     limit: int = 20,
     skip: Optional[int] = None,
     status: Optional[str] = None,
+    category: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Meeting).filter(Meeting.is_active == True)
     if status:
         query = query.filter(Meeting.status == status)
+    if category:
+        query = query.filter(Meeting.category == category)
     total = query.count()
     offset = skip if skip is not None else (page - 1) * limit
     meetings = query.order_by(Meeting.date.desc()).offset(offset).limit(limit).all()
@@ -239,20 +273,7 @@ async def list_meetings(
     return {
         "success": True,
         "data": {
-            "meetings": [
-                {
-                    "id": str(m.id),
-                    "title": m.title,
-                    "date": m.date.isoformat(),
-                    "time": m.time,
-                    "venue": m.venue,
-                    "agenda": m.agenda,
-                    "term": m.term,
-                    "academic_year": m.academic_year,
-                    "status": m.status.value,
-                }
-                for m in meetings
-            ],
+            "meetings": [_serialize_meeting(m) for m in meetings],
             "pagination": {
                 "page": effective_page,
                 "limit": limit,
@@ -284,20 +305,7 @@ async def upcoming_meetings(
     )
     return {
         "success": True,
-        "data": [
-            {
-                "id": str(m.id),
-                "title": m.title,
-                "date": m.date.isoformat(),
-                "time": m.time,
-                "venue": m.venue,
-                "agenda": m.agenda,
-                "term": m.term,
-                "academic_year": m.academic_year,
-                "status": m.status.value,
-            }
-            for m in meetings
-        ],
+        "data": [_serialize_meeting(m) for m in meetings],
     }
 
 
