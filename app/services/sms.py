@@ -6,7 +6,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.sms_errors import SmsDeliveryError, mnotify_error_message
-from app.utils.phone import to_mnotify_recipient
+from app.utils.phone import to_mnotify_recipient, PhoneValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ async def send_verification_code_sms(phone: str, code: str) -> dict:
     """Send parent login verification code via regular SMS credits (not mNotify OTP wallet)."""
     minutes = max(1, settings.otp_expiry_seconds // 60)
     message = (
-        f"Your Mawuli PTA verification code is {code}. "
+        f"Your SchoolPulse PTA verification code is {code}. "
         f"Valid for {minutes} minutes. Do not share this code."
     )
     if settings.sms_dry_run:
@@ -142,7 +142,14 @@ async def send_bulk_sms(
     results = []
     for i in range(0, len(phones), batch_size):
         batch = phones[i : i + batch_size]
-        recipients = [to_mnotify_recipient(p) for p in batch]
+        recipients: list[str] = []
+        for phone in batch:
+            try:
+                recipients.append(to_mnotify_recipient(phone))
+            except PhoneValidationError:
+                logger.warning("Skipping invalid SMS recipient: %s", phone)
+        if not recipients:
+            continue
         payload = _build_payload(recipients, message, schedule_date=schedule_date)
         results.append(await _post_mnotify(payload))
     return results

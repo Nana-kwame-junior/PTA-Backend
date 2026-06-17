@@ -1,11 +1,26 @@
 """Shared helpers for admin parent listings and meeting SMS recipients."""
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.parent import MatchStatus, Parent
 from app.models.parent_student_link import ParentStudentLink
 from app.models.student import Student
 from app.utils.phone import normalize_ghana_phone, PhoneValidationError
+
+logger = logging.getLogger(__name__)
+
+
+def _phone_for_sms(raw: str | None, *, context: str) -> str | None:
+    """Normalize to +233… for SMS; adds country code when only local digits are stored."""
+    if not (raw or "").strip():
+        return None
+    try:
+        return normalize_ghana_phone(raw)
+    except PhoneValidationError:
+        logger.warning("Skipping invalid phone for %s: %s", context, raw)
+        return None
 
 
 def linked_students_for_parent(db: Session, parent_id: str) -> list[dict]:
@@ -62,19 +77,14 @@ def meeting_recipient_phones(db: Session) -> list[str]:
     """Matched app parents plus phone numbers stored on student records."""
     phones: set[str] = set()
     for parent in db.query(Parent).filter(Parent.match_status == MatchStatus.MATCHED).all():
-        if parent.phone:
-            try:
-                phones.add(normalize_ghana_phone(parent.phone))
-            except PhoneValidationError:
-                phones.add(parent.phone.strip())
+        normalized = _phone_for_sms(parent.phone, context="meeting SMS parent")
+        if normalized:
+            phones.add(normalized)
     for student in db.query(Student).filter(Student.is_active == True).all():
         for raw in (student.parent_phone_1, student.parent_phone_2):
-            if not raw:
-                continue
-            try:
-                phones.add(normalize_ghana_phone(raw))
-            except PhoneValidationError:
-                phones.add(raw.strip())
+            normalized = _phone_for_sms(raw, context=f"meeting SMS student {student.id}")
+            if normalized:
+                phones.add(normalized)
     return sorted(phones)
 
 
@@ -89,19 +99,16 @@ def student_recipient_phones(db: Session, student_id: str) -> list[str]:
         return []
 
     for raw in (student.parent_phone_1, student.parent_phone_2):
-        if not raw:
-            continue
-        try:
-            phones.add(normalize_ghana_phone(raw))
-        except PhoneValidationError:
-            phones.add(raw.strip())
+        normalized = _phone_for_sms(raw, context=f"dues SMS student {student_id}")
+        if normalized:
+            phones.add(normalized)
 
     for link in db.query(ParentStudentLink).filter(ParentStudentLink.student_id == student_id).all():
         parent = db.query(Parent).filter(Parent.id == link.parent_id).first()
-        if parent and parent.phone:
-            try:
-                phones.add(normalize_ghana_phone(parent.phone))
-            except PhoneValidationError:
-                phones.add(parent.phone.strip())
+        if not parent:
+            continue
+        normalized = _phone_for_sms(parent.phone, context=f"dues SMS parent {parent.id}")
+        if normalized:
+            phones.add(normalized)
 
     return sorted(phones)
