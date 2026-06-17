@@ -25,7 +25,11 @@ from fastapi.responses import StreamingResponse
 from app.workers.lock_tasks import lock_manual_payment
 from app.services.activity_log import log_staff_activity
 from app.services.task_queue import safe_apply_async
-from app.services.dues_balance import student_term_dues_balance, format_payment_sms
+from app.services.dues_balance import (
+    student_outstanding_summary,
+    apply_payment_fifo,
+    format_payment_sms,
+)
 
 router = APIRouter(prefix="/payments/manual", tags=["Manual Payments"])
 logger = logging.getLogger(__name__)
@@ -79,43 +83,59 @@ async def record_manual_payment(
     parent_phones = list(dict.fromkeys(parent_phones))
     parent_phone = parent_phones[0] if parent_phones else None
 
-    balance_info = student_term_dues_balance(
-        db,
-        student_id=student.id,
-        academic_year=dues_config.academic_year,
-        term=dues_config.term,
-    )
-    balance_before = balance_info["remaining_ghs"]
-    balance_after = max(balance_before - Decimal(str(req.amount_ghs)), Decimal("0"))
+    balance_info = student_outstanding_summary(db, student_id=student.id)
+    balance_before = Decimal(balance_info["total_due_ghs"])
     
     receipt_number = generate_receipt_number(db)
-    manual_payment = ManualPayment(
-        receipt_number=receipt_number,
+    arrear_rows, current_portion = apply_payment_fifo(
+        db,
         student_id=student.id,
-        student_index_no=student.index_number,
-        student_name=student.full_name,
-        parent_phone=parent_phone,
-        term=dues_config.term,
-        academic_year=dues_config.academic_year,
-        amount_ghs=req.amount_ghs,
-        payment_mode=req.payment_mode,
+        amount=req.amount_ghs,
         payment_date=req.payment_date,
         recorded_by_user_id=staff["id"],
         recorded_by_name=user.name if user else staff["id"],
-        recorded_at=datetime.utcnow(),
-        ip_address=request.client.host,
-        notes=req.notes,
-        is_locked=False
+        payment_mode=req.payment_mode,
+        receipt_number=receipt_number,
+        parent_phone=parent_phone,
+        student_name=student.full_name,
+        student_index_no=student.index_number,
+        allocation_note=f"Manual split · {receipt_number}",
     )
-    db.add(manual_payment)
+    current_amount = current_portion if current_portion > 0 else Decimal(str(req.amount_ghs))
+    if current_portion <= 0 and arrear_rows:
+        current_amount = Decimal("0")
+
+    manual_payment = None
+    if current_amount > 0:
+        manual_payment = ManualPayment(
+            receipt_number=receipt_number,
+            student_id=student.id,
+            student_index_no=student.index_number,
+            student_name=student.full_name,
+            parent_phone=parent_phone,
+            term=dues_config.term,
+            academic_year=dues_config.academic_year,
+            amount_ghs=current_amount,
+            payment_mode=req.payment_mode,
+            payment_date=req.payment_date,
+            recorded_by_user_id=staff["id"],
+            recorded_by_name=user.name if user else staff["id"],
+            recorded_at=datetime.utcnow(),
+            ip_address=request.client.host,
+            notes=req.notes,
+            is_locked=False,
+        )
+        db.add(manual_payment)
     db.commit()
-    db.refresh(manual_payment)
+    if manual_payment:
+        db.refresh(manual_payment)
+    balance_after = max(balance_before - Decimal(str(req.amount_ghs)), Decimal("0"))
     log_staff_activity(
         db,
         staff,
         page_label="Record Payment",
         action_label=f"Recorded GH₵{req.amount_ghs} for {student.full_name}",
-        details=receipt_number,
+        details=receipt_number if manual_payment else f"{receipt_number} (arrears only)",
     )
     
     # Send SMS to all parent phones (non-blocking; failures must not undo payment)
@@ -140,25 +160,27 @@ async def record_manual_payment(
                     status="QUEUED",
                 )
             )
-        manual_payment.sms_sent = bool(parent_phones)
-        if parent_phones:
-            manual_payment.sms_sent_at = datetime.utcnow()
+        if manual_payment:
+            manual_payment.sms_sent = bool(parent_phones)
+            if parent_phones:
+                manual_payment.sms_sent_at = datetime.utcnow()
         db.commit()
     except Exception as exc:
         db.rollback()
         logger.warning("SMS logging failed after payment recorded: %s", exc)
 
-    lock_time = datetime.utcnow() + timedelta(hours=24)
-    safe_apply_async(
-        lock_manual_payment,
-        args=[str(manual_payment.id)],
-        countdown=24 * 60 * 60,
-    )
+    if manual_payment:
+        lock_time = datetime.utcnow() + timedelta(hours=24)
+        safe_apply_async(
+            lock_manual_payment,
+            args=[str(manual_payment.id)],
+            countdown=24 * 60 * 60,
+        )
     
     return {
         "success": True,
         "data": {
-            "id": str(manual_payment.id),
+            "id": str(manual_payment.id) if manual_payment else None,
             "receipt_number": receipt_number,
             "student_index_number": student.index_number,
             "student_name": student.full_name,
@@ -166,10 +188,10 @@ async def record_manual_payment(
             "payment_mode": req.payment_mode.value,
             "payment_date": req.payment_date.isoformat(),
             "recorded_by": user.name if user else staff["id"],
-            "recorded_at": manual_payment.recorded_at.isoformat(),
+            "recorded_at": manual_payment.recorded_at.isoformat() if manual_payment else datetime.utcnow().isoformat(),
             "is_locked": False,
-            "lock_at": lock_time.isoformat(),
-            "sms_sent": True
+            "lock_at": lock_time.isoformat() if manual_payment else None,
+            "sms_sent": bool(parent_phones),
         }
     }
 

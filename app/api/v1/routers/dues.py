@@ -5,13 +5,15 @@ from typing import Optional
 from datetime import timedelta
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import require_permission, require_parent_match
 from app.models.dues_config import DuesConfig
 from app.models.academic import AcademicTerm
+from app.models.student import Student
 from app.schemas.dues import DuesConfigCreate, DuesConfigUpdate
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_dues_reminder
 from app.services.task_queue import safe_apply_async
+from app.services.dues_balance import student_outstanding_summary
 
 router = APIRouter(prefix="/dues", tags=["Dues Configuration"])
 
@@ -91,6 +93,40 @@ async def get_current_dues(db: Session = Depends(get_db)):
     if not config:
         return {"success": True, "data": None}
     return {"success": True, "data": _serialize_dues(config)}
+
+
+@router.get("/outstanding/{student_id}")
+async def get_student_outstanding(
+    student_id: UUID,
+    db: Session = Depends(get_db),
+    parent=Depends(require_parent_match),
+):
+    if str(student_id) not in parent.get("matched_student_ids", []):
+        raise HTTPException(status_code=403, detail="Student not linked to this parent")
+    student = db.query(Student).filter(Student.id == str(student_id)).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    summary = student_outstanding_summary(db, student_id=str(student_id))
+    summary["student_name"] = student.full_name
+    summary["student_index_number"] = student.index_number
+    return {"success": True, "data": summary}
+
+
+@router.get("/parent/outstanding")
+async def get_parent_outstanding(
+    db: Session = Depends(get_db),
+    parent=Depends(require_parent_match),
+):
+    wards = []
+    for student_id in parent.get("matched_student_ids", []):
+        student = db.query(Student).filter(Student.id == student_id, Student.is_active == True).first()
+        if not student:
+            continue
+        summary = student_outstanding_summary(db, student_id=student.id)
+        summary["student_name"] = student.full_name
+        summary["student_index_number"] = student.index_number
+        wards.append(summary)
+    return {"success": True, "data": {"wards": wards}}
 
 
 @router.patch("/{config_id}")

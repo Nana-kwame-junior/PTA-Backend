@@ -22,7 +22,12 @@ from app.services.paystack import (
     paystack_is_configured,
 )
 from app.services.sms import send_sms_background
-from app.services.dues_balance import student_term_dues_balance, format_payment_sms
+from app.services.dues_balance import (
+    student_term_dues_balance,
+    student_outstanding_summary,
+    apply_online_payment_allocations,
+    format_payment_sms,
+)
 from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -75,13 +80,14 @@ async def _mark_payment_completed(payment: Payment, db: Session, background_task
     student = db.query(Student).filter(Student.id == payment.student_id).first()
     dues = db.query(DuesConfig).filter(DuesConfig.id == payment.dues_config_id).first()
     if parent and student and dues:
-        balance = student_term_dues_balance(
+        apply_online_payment_allocations(
             db,
-            student_id=student.id,
-            academic_year=dues.academic_year,
-            term=dues.term,
+            payment=payment,
+            student=student,
+            parent_phone=parent.phone,
         )
-        balance_after = balance["remaining_ghs"]
+        summary = student_outstanding_summary(db, student_id=student.id)
+        balance_after = Decimal(summary["total_due_ghs"])
         balance_before = balance_after + Decimal(str(payment.amount_ghs))
         message = format_payment_sms(
             student_name=student.full_name,
@@ -141,24 +147,29 @@ async def initiate_payment(
     if not dues_config:
         raise HTTPException(status_code=404, detail="Dues configuration not found")
 
-    existing = (
+    outstanding = student_outstanding_summary(db, student_id=str(req.student_id))
+    total_due = Decimal(outstanding["total_due_ghs"])
+    if total_due <= 0:
+        raise HTTPException(status_code=409, detail="All dues are paid for this student")
+
+    pending = (
         db.query(Payment)
         .filter(
             Payment.student_id == str(req.student_id),
             Payment.dues_config_id == str(req.dues_config_id),
-            Payment.status == PaymentStatus.COMPLETED,
+            Payment.status == PaymentStatus.PENDING,
         )
         .first()
     )
-    if existing:
-        raise HTTPException(status_code=409, detail="Dues already paid for this term")
+    if pending:
+        raise HTTPException(status_code=409, detail="A payment is already pending for this student")
 
     payment_ref = f"mwl-{uuid.uuid4().hex[:8]}"
     payment = Payment(
         student_id=str(req.student_id),
         dues_config_id=str(req.dues_config_id),
         parent_id=parent["id"],
-        amount_ghs=dues_config.amount_ghs,
+        amount_ghs=total_due,
         paystack_reference=payment_ref,
         status=PaymentStatus.PENDING,
     )
@@ -166,7 +177,7 @@ async def initiate_payment(
     db.commit()
     db.refresh(payment)
 
-    amount_in_pesewas = int(float(dues_config.amount_ghs) * 100)
+    amount_in_pesewas = int(float(total_due) * 100)
     parent_row = db.query(Parent).filter(Parent.id == parent["id"]).first()
     paystack_email = _paystack_email(parent_row.phone if parent_row else parent.get("phone", ""))
     result = await initialize_transaction(
@@ -188,7 +199,10 @@ async def initiate_payment(
             "payment_id": str(payment.id),
             "paystack_reference": payment_ref,
             "authorization_url": result["data"]["authorization_url"],
-            "amount_ghs": str(dues_config.amount_ghs),
+            "amount_ghs": str(total_due),
+            "breakdown": outstanding["breakdown"],
+            "arrears_ghs": outstanding["arrears_ghs"],
+            "current_term_amount_ghs": outstanding["current_term_amount_ghs"],
             "public_key": settings.paystack_public_key,
         },
     }
