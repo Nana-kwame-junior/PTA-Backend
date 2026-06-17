@@ -60,7 +60,10 @@ async def create_meeting(
     db: Session = Depends(get_db),
     staff=Depends(require_permission("meetings")),
 ):
-    meeting = Meeting(**req.dict())
+    data = req.dict()
+    data["category"] = AnnouncementType(data.get("category", "GENERAL"))
+    data["status"] = MeetingStatus(data.get("status", "SCHEDULED"))
+    meeting = Meeting(**data)
     db.add(meeting)
     db.commit()
     db.refresh(meeting)
@@ -76,15 +79,7 @@ async def create_meeting(
     if meeting.status != MeetingStatus.SCHEDULED:
         return {
             "success": True,
-            "data": {
-                "id": str(meeting.id),
-                "title": meeting.title,
-                "date": meeting.date.isoformat(),
-                "time": meeting.time,
-                "venue": meeting.venue,
-                "status": meeting.status.value,
-                "sms_jobs": None,
-            },
+            "data": {**_serialize_meeting(meeting), "sms_jobs": None},
         }
 
     # Schedule Celery tasks
@@ -114,12 +109,7 @@ async def create_meeting(
     return {
         "success": True,
         "data": {
-            "id": str(meeting.id),
-            "title": meeting.title,
-            "date": meeting.date.isoformat(),
-            "time": meeting.time,
-            "venue": meeting.venue,
-            "status": meeting.status.value,
+            **_serialize_meeting(meeting),
             "sms_jobs": {
                 "d7": {"scheduled_for": (meeting.date - timedelta(days=7)).isoformat()},
                 "d3": {"scheduled_for": (meeting.date - timedelta(days=3)).isoformat()},
@@ -141,6 +131,8 @@ async def update_meeting(
         raise HTTPException(status_code=404)
     old_date = meeting.date
     for key, value in req.dict(exclude_unset=True).items():
+        if key == "category" and value is not None:
+            value = AnnouncementType(value)
         setattr(meeting, key, value)
     db.commit()
 
