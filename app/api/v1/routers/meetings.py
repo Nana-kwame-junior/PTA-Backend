@@ -14,7 +14,7 @@ from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel, AttendanceRecord
 from app.services.sms import send_sms
-from app.services.meeting_sms import schedule_meeting_reminders_sync
+from app.services.meeting_sms import meeting_sms_on_create_sync, schedule_meeting_reminders_sync
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_meeting_reminder
 from app.services.task_queue import safe_apply_async
@@ -43,7 +43,17 @@ def cancel_meeting_jobs(meeting_id: str, db: Session):
     db.commit()
 
 
-def _schedule_meeting_sms_background(meeting_id: str) -> None:
+def _meeting_sms_on_create_background(meeting_id: str) -> None:
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if meeting:
+            meeting_sms_on_create_sync(db, meeting)
+    finally:
+        db.close()
+
+
+def _schedule_meeting_reminders_background(meeting_id: str) -> None:
     db = SessionLocal()
     try:
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -103,8 +113,8 @@ async def create_meeting(
         eta=eta_d0,
     )
 
-    # Schedule SMS via mNotify (works without Redis/Celery)
-    background_tasks.add_task(_schedule_meeting_sms_background, str(meeting.id))
+    # Immediate SMS + scheduled D7/D3/D0 reminders via mNotify
+    background_tasks.add_task(_meeting_sms_on_create_background, str(meeting.id))
 
     return {
         "success": True,
@@ -156,7 +166,7 @@ async def update_meeting(
             args=[str(meeting.id), "D0"],
             eta=eta_d0,
         )
-        background_tasks.add_task(_schedule_meeting_sms_background, str(meeting.id))
+        background_tasks.add_task(_schedule_meeting_reminders_background, str(meeting.id))
         # Send reschedule SMS (background)
         from app.services.sms import send_sms
         parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
@@ -257,7 +267,7 @@ async def list_meetings(
     if status:
         query = query.filter(Meeting.status == status)
     if category:
-        query = query.filter(Meeting.category == category)
+        query = query.filter(Meeting.category == AnnouncementType(category))
     total = query.count()
     offset = skip if skip is not None else (page - 1) * limit
     meetings = query.order_by(Meeting.date.desc()).offset(offset).limit(limit).all()
