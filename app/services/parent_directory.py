@@ -63,7 +63,10 @@ def meeting_recipient_phones(db: Session) -> list[str]:
     phones: set[str] = set()
     for parent in db.query(Parent).filter(Parent.match_status == MatchStatus.MATCHED).all():
         if parent.phone:
-            phones.add(parent.phone)
+            try:
+                phones.add(normalize_ghana_phone(parent.phone))
+            except PhoneValidationError:
+                phones.add(parent.phone.strip())
     for student in db.query(Student).filter(Student.is_active == True).all():
         for raw in (student.parent_phone_1, student.parent_phone_2):
             if not raw:
@@ -72,4 +75,33 @@ def meeting_recipient_phones(db: Session) -> list[str]:
                 phones.add(normalize_ghana_phone(raw))
             except PhoneValidationError:
                 phones.add(raw.strip())
+    return sorted(phones)
+
+
+def student_recipient_phones(db: Session, student_id: str) -> list[str]:
+    """
+    All SMS numbers for a ward: parent_phone_1/2 on the student record plus any
+    registered parent app numbers linked to that student. Duplicates removed.
+    """
+    phones: set[str] = set()
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        return []
+
+    for raw in (student.parent_phone_1, student.parent_phone_2):
+        if not raw:
+            continue
+        try:
+            phones.add(normalize_ghana_phone(raw))
+        except PhoneValidationError:
+            phones.add(raw.strip())
+
+    for link in db.query(ParentStudentLink).filter(ParentStudentLink.student_id == student_id).all():
+        parent = db.query(Parent).filter(Parent.id == link.parent_id).first()
+        if parent and parent.phone:
+            try:
+                phones.add(normalize_ghana_phone(parent.phone))
+            except PhoneValidationError:
+                phones.add(parent.phone.strip())
+
     return sorted(phones)

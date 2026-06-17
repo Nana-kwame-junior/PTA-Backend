@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
 from datetime import timedelta
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission, require_parent_match
 from app.models.dues_config import DuesConfig
 from app.models.academic import AcademicTerm
@@ -12,10 +12,19 @@ from app.models.student import Student
 from app.schemas.dues import DuesConfigCreate, DuesConfigUpdate
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_dues_reminder
+from app.services.dues_sms import send_dues_sms_for_config
 from app.services.task_queue import safe_apply_async
 from app.services.dues_balance import student_outstanding_summary
 
 router = APIRouter(prefix="/dues", tags=["Dues Configuration"])
+
+
+def _send_dues_announcement_background(dues_config_id: str) -> None:
+    db = SessionLocal()
+    try:
+        send_dues_sms_for_config(db, dues_config_id, "NEW")
+    finally:
+        db.close()
 
 
 def _serialize_dues(row: DuesConfig) -> dict:
@@ -34,6 +43,7 @@ def _serialize_dues(row: DuesConfig) -> dict:
 @router.post("")
 async def create_dues_config(
     req: DuesConfigCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("payments.dues")),
 ):
@@ -49,9 +59,11 @@ async def create_dues_config(
     db.commit()
     db.refresh(dues)
 
+    background_tasks.add_task(_send_dues_announcement_background, str(dues.id))
     safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
     safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-    safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
+    overdue_eta = dues.due_date + timedelta(days=dues.grace_period_days + 1)
+    safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=overdue_eta)
 
     log_staff_activity(
         db,
@@ -146,7 +158,8 @@ async def update_dues_config(
     if req.due_date and req.due_date != old_due_date:
         safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
         safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-        safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=dues.due_date + timedelta(days=1))
+        overdue_eta = dues.due_date + timedelta(days=dues.grace_period_days + 1)
+        safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=overdue_eta)
     log_staff_activity(
         db,
         staff,
