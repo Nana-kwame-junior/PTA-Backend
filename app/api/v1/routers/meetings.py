@@ -171,7 +171,7 @@ async def update_meeting(
         from app.services.sms import send_sms
         parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
         phones = [p.phone for p in parents if p.phone]
-        message = f"UPDATED: The PTA meeting previously scheduled for {old_date.strftime('%d %b %Y')} has been rescheduled to {meeting.date.strftime('%d %b %Y')} at {meeting.time}, {meeting.venue}. — Mawuli SHS PTA"
+        message = f"UPDATED: The PTA meeting previously scheduled for {old_date.strftime('%d %b %Y')} has been rescheduled to {meeting.date.strftime('%d %b %Y')} at {meeting.time}, {meeting.venue}. —SchoolPulse"
         for phone in phones:
             # In production, use background task (e.g., celery)
             pass  # We'll leave SMS sending to the caller or use a separate task
@@ -207,7 +207,7 @@ async def cancel_meeting(
     # Send cancellation SMS (background)
     parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
     phones = [p.phone for p in parents if p.phone]
-    message = f"The PTA meeting scheduled for {meeting.date.strftime('%d %b %Y')} has been cancelled. Reason: {req.reason}. — Mawuli SHS PTA"
+    message = f"The PTA meeting scheduled for {meeting.date.strftime('%d %b %Y')} has been cancelled. Reason: {req.reason}. —SchoolPulse"
     for phone in phones:
         # Use background task
         pass
@@ -224,7 +224,7 @@ async def send_agenda_sms(
         raise HTTPException(status_code=404)
     parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
     phones = [p.phone for p in parents if p.phone]
-    message = f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: {meeting.agenda[:120]}... Full agenda on the Mawuli PTA app. — Mawuli SHS PTA"
+    message = f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: {meeting.agenda[:120]}... Full agenda on the SchoolPulse PTA app. —SchoolPulse"
     for phone in phones:
         # Use background task
         pass

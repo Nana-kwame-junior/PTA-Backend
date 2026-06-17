@@ -69,7 +69,7 @@ def build_dues_sms_message(
         )
         if arrears > 0:
             base += f" Includes GH₵{arrears:.2f} unpaid from previous term(s)."
-        return base + " Pay at the school office or via the Mawuli PTA app."
+        return base + " Pay at the school office or via the SchoolPulse PTA app."
 
     if reminder_type == "OVERDUE":
         base = (
@@ -87,7 +87,7 @@ def build_dues_sms_message(
     )
     if arrears > 0:
         base += f" Total includes GH₵{arrears:.2f} from previous term(s)."
-    return base + " Pay via the Mawuli PTA app or school office."
+    return base + " Pay via the SchoolPulse PTA app or school office."
 
 
 def send_dues_sms_for_config(db: Session, dues_config_id: str, reminder_type: str) -> int:

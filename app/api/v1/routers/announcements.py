@@ -37,7 +37,7 @@ async def create_announcement(
         phones = [p.phone for p in parents if p.phone]
         recipients_count = len(phones)
         # Truncate message if needed (SMS limit ~160 chars)
-        sms_body = f"{req.title}: {req.body[:140]}... — Mawuli SHS PTA"
+        sms_body = f"{req.title}: {req.body[:140]}... —SchoolPulse"
         for phone in phones:
             background_tasks.add_task(send_sms_background, phone, sms_body)
             sms_log = SmsLog(

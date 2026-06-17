@@ -276,7 +276,7 @@ async def paystack_callback(reference: str = None, trxref: str = None):
     <body style="font-family:sans-serif;text-align:center;padding:48px;">
       <h1>Payment received</h1>
       <p>Reference: {ref}</p>
-      <p>You can close this page and return to the Mawuli PTA app.</p>
+      <p>You can close this page and return to the SchoolPulse PTA app.</p>
     </body></html>
     """
     return HTMLResponse(content=html)

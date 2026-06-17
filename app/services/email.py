@@ -56,11 +56,11 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
 
 def send_temporary_password_email(to_email: str, temp_password: str, user_name: str) -> bool:
     login_url = settings.dashboard_url.rstrip("/") + "/login"
-    subject = "Your Mawuli PTA Staff Portal Access"
+    subject = "YourSchoolPulse PTA Staff Portal Access"
 
     text_body = f"""Hello {user_name},
 
-Your staff account for the Mawuli SHS PTA Management System is ready.
+Your staff account for theSchoolPulse Management System is ready.
 
 Sign in with:
   Email: {to_email}
@@ -70,7 +70,7 @@ Portal: {login_url}
 
 Use your email address and the temporary password above to log in. You will be asked to choose a new password immediately after signing in.
 
-— Mawuli SHS PTA
+—SchoolPulse
 """
 
     html_body = f"""
@@ -107,7 +107,7 @@ Use your email address and the temporary password above to log in. You will be a
         </tr>
         <tr>
           <td style="padding:20px 32px;background:#f8fafc;color:#94a3b8;font-size:12px;">
-            Mawuli Senior High School · PTA Management System
+           SchoolPulse PTA School · PTA Management System
           </td>
         </tr>
       </table>
@@ -121,7 +121,7 @@ Use your email address and the temporary password above to log in. You will be a
 
 def send_password_reset_email(to_email: str, user_name: str, reset_token: str) -> bool:
     reset_url = f"{settings.dashboard_url.rstrip('/')}/reset-password?token={reset_token}"
-    subject = "Reset your Mawuli PTA staff password"
+    subject = "Reset yourSchoolPulse PTA staff password"
 
     text_body = f"""Hello {user_name},
 
@@ -132,7 +132,7 @@ Open this link to choose a new password (valid for 1 hour):
 
 If you did not request this, you can ignore this email.
 
-— Mawuli SHS PTA
+—SchoolPulse
 """
 
     html_body = f"""

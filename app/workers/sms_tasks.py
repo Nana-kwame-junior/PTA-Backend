@@ -21,7 +21,7 @@ def send_meeting_reminder(self, meeting_id: str, reminder_type: str):
             return
         message = (
             f"PTA Meeting Reminder: {meeting.title} on {meeting.date.strftime('%d %b %Y')} at {meeting.time}, "
-            f"{meeting.venue}. Agenda available on the app. — Mawuli SHS PTA"
+            f"{meeting.venue}. Agenda available on the app. —SchoolPulse"
         )
         phones = meeting_recipient_phones(db)
         for phone in phones:

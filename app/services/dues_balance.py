@@ -323,5 +323,5 @@ def format_payment_sms(
         f"{channel} received: GH₵{amt:.2f} for {student_name}, {term} · {academic_year}. "
         f"Previous balance owed: GH₵{before:.2f}. "
         f"Remaining balance: GH₵{after:.2f}. "
-        f"Receipt: {receipt_number}. — Mawuli SHS PTA"
+        f"Receipt: {receipt_number}. —SchoolPulse"
     )

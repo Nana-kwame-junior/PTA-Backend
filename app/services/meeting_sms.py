@@ -26,7 +26,7 @@ def _reminder_message(meeting: Meeting, reminder_type: str) -> str:
     when = meeting.date.strftime("%d %b %Y")
     return (
         f"PTA Meeting Reminder ({reminder_type}): {meeting.title} on {when} at {meeting.time}, "
-        f"{meeting.venue}. See the Mawuli PTA app for details. — Mawuli SHS PTA"
+        f"{meeting.venue}. See the SchoolPulse PTA app for details. —SchoolPulse"
     )
 
 
@@ -35,7 +35,7 @@ def _created_message(meeting: Meeting) -> str:
     prefix = "URGENT: " if meeting.category == AnnouncementType.URGENT else ""
     return (
         f"{prefix}PTA Meeting: {meeting.title} on {when} at {meeting.time}, "
-        f"{meeting.venue}. See the Mawuli PTA app for details. — Mawuli SHS PTA"
+        f"{meeting.venue}. See the SchoolPulse PTA app for details. —SchoolPulse"
     )
 
 

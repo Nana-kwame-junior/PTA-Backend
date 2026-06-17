@@ -137,8 +137,8 @@ async def approve_pending_match(
 
     if parent and parent.phone:
         message = (
-            "Your Mawuli SHS PTA account has been verified. "
-            "You can now log in to view your ward's details. — Mawuli SHS PTA"
+            "YourSchoolPulse account has been verified. "
+            "You can now log in to view your ward's details. —SchoolPulse"
         )
         background_tasks.add_task(send_sms_background, parent.phone, message)
         db.add(
@@ -173,7 +173,7 @@ async def reject_pending_match(
         reason = req.get("reason", "No reason provided")
         message = (
             f"Your parent account could not be verified: {reason}. "
-            "Please contact the school for assistance. — Mawuli SHS PTA"
+            "Please contact the school for assistance. —SchoolPulse"
         )
         background_tasks.add_task(send_sms_background, parent.phone, message)
         db.add(

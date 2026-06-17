@@ -352,9 +352,9 @@ async def approve_pending_match(
 
         message = (
 
-            f"Your Mawuli SHS PTA account is verified. Linked ward(s): {ward_names}. "
+            f"YourSchoolPulse account is verified. Linked ward(s): {ward_names}. "
 
-            "Open the app to view details. — Mawuli SHS PTA"
+            "Open the app to view details. —SchoolPulse"
 
         )
 
@@ -424,7 +424,7 @@ async def reject_pending_match(
 
             f"Your parent account could not be verified: {reason}. "
 
-            "Please contact the school for assistance. — Mawuli SHS PTA"
+            "Please contact the school for assistance. —SchoolPulse"
 
         )
 
