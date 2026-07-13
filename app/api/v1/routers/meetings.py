@@ -1,28 +1,47 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
-import json
+from zoneinfo import ZoneInfo
 
 from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.announcement import AnnouncementType
 from app.models.job_record import JobRecord
-from app.models.parent import Parent
-from app.models.sms_log import SmsLog
-from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel, AttendanceRecord
-from app.services.sms import send_sms
-from app.services.meeting_sms import meeting_sms_on_create_sync, schedule_meeting_reminders_sync
+from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel
+from app.services.meeting_sms import (
+    cancel_meeting_sms_jobs,
+    meeting_sms_on_cancel_sync,
+    meeting_sms_on_create_sync,
+    meeting_sms_on_update_sync,
+    parse_meeting_start,
+    reminder_plan_summary,
+)
 from app.services.activity_log import log_staff_activity
-from app.workers.sms_tasks import send_meeting_reminder
-from app.services.task_queue import safe_apply_async
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
+ACCRA = ZoneInfo("Africa/Accra")
+
+
+def _meeting_lifecycle(meeting: Meeting) -> str:
+    status = meeting.status
+    if status == MeetingStatus.CANCELLED:
+        return "cancelled"
+    if status == MeetingStatus.COMPLETED:
+        return "ended"
+    try:
+        start = parse_meeting_start(meeting)
+        if start <= datetime.now(ACCRA):
+            return "ended"
+    except Exception:
+        pass
+    return "upcoming"
 
 
 def _serialize_meeting(meeting: Meeting) -> dict:
+    lifecycle = _meeting_lifecycle(meeting)
     return {
         "id": str(meeting.id),
         "title": meeting.title,
@@ -34,13 +53,14 @@ def _serialize_meeting(meeting: Meeting) -> dict:
         "academic_year": meeting.academic_year,
         "category": meeting.category.value if meeting.category else "GENERAL",
         "status": meeting.status.value,
+        "lifecycle": lifecycle,
+        "is_ended": lifecycle != "upcoming",
     }
 
 
 def cancel_meeting_jobs(meeting_id: str, db: Session):
-    # In production, you would cancel Celery tasks using task id stored in JobRecord
-    db.query(JobRecord).filter(JobRecord.reference_id == meeting_id).update({"status": "CANCELLED"})
-    db.commit()
+    """Backward-compatible alias used by deactivate."""
+    cancel_meeting_sms_jobs(db, meeting_id)
 
 
 def _meeting_sms_on_create_background(meeting_id: str) -> None:
@@ -49,16 +69,54 @@ def _meeting_sms_on_create_background(meeting_id: str) -> None:
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
         if meeting:
             meeting_sms_on_create_sync(db, meeting)
+    except Exception:
+        # Never crash the request worker silently without a log
+        import logging
+
+        logging.getLogger(__name__).exception("meeting SMS on create failed for %s", meeting_id)
     finally:
         db.close()
 
 
-def _schedule_meeting_reminders_background(meeting_id: str) -> None:
+def _meeting_sms_on_update_background(
+    meeting_id: str,
+    old_date_iso: str,
+    old_time: Optional[str],
+    old_venue: Optional[str],
+    reschedule: bool,
+) -> None:
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            return
+        old_date = datetime.fromisoformat(old_date_iso)
+        meeting_sms_on_update_sync(
+            db,
+            meeting,
+            old_date=old_date,
+            old_time=old_time,
+            old_venue=old_venue,
+            reschedule=reschedule,
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("meeting SMS on update failed for %s", meeting_id)
+    finally:
+        db.close()
+
+
+def _meeting_sms_on_cancel_background(meeting_id: str, reason: str) -> None:
     db = SessionLocal()
     try:
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
         if meeting:
-            schedule_meeting_reminders_sync(db, meeting)
+            meeting_sms_on_cancel_sync(db, meeting, reason)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("meeting SMS on cancel failed for %s", meeting_id)
     finally:
         db.close()
 
@@ -92,41 +150,17 @@ async def create_meeting(
             "data": {**_serialize_meeting(meeting), "sms_jobs": None},
         }
 
-    # Schedule Celery tasks
-    # D7
-    safe_apply_async(
-        send_meeting_reminder,
-        args=[str(meeting.id), "D7"],
-        eta=meeting.date - timedelta(days=7),
-    )
-    # D3
-    safe_apply_async(
-        send_meeting_reminder,
-        args=[str(meeting.id), "D3"],
-        eta=meeting.date - timedelta(days=3),
-    )
-    # D0 (morning of meeting)
-    eta_d0 = meeting.date.replace(hour=7, minute=0, second=0)
-    safe_apply_async(
-        send_meeting_reminder,
-        args=[str(meeting.id), "D0"],
-        eta=eta_d0,
-    )
-
-    # Immediate SMS + scheduled D7/D3/D0 reminders via mNotify
+    # Immediate SMS to all parents + schedule D7/D4/D2/D0/AT_TIME reminders
     background_tasks.add_task(_meeting_sms_on_create_background, str(meeting.id))
 
     return {
         "success": True,
         "data": {
             **_serialize_meeting(meeting),
-            "sms_jobs": {
-                "d7": {"scheduled_for": (meeting.date - timedelta(days=7)).isoformat()},
-                "d3": {"scheduled_for": (meeting.date - timedelta(days=3)).isoformat()},
-                "d0": {"scheduled_for": eta_d0.isoformat()}
-            }
-        }
+            "sms_jobs": reminder_plan_summary(meeting),
+        },
     }
+
 
 @router.patch("/{meeting_id}")
 async def update_meeting(
@@ -139,42 +173,38 @@ async def update_meeting(
     meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
     if not meeting:
         raise HTTPException(status_code=404)
+
     old_date = meeting.date
-    for key, value in req.dict(exclude_unset=True).items():
+    old_time = meeting.time
+    old_venue = meeting.venue
+
+    updates = req.dict(exclude_unset=True)
+    for key, value in updates.items():
         if key == "category" and value is not None:
             value = AnnouncementType(value)
         setattr(meeting, key, value)
     db.commit()
+    db.refresh(meeting)
 
-    if req.date and req.date != old_date:
-        # Cancel old jobs and reschedule
-        cancel_meeting_jobs(str(meeting_id), db)
-        # Schedule new jobs (same as create)
-        safe_apply_async(
-            send_meeting_reminder,
-            args=[str(meeting.id), "D7"],
-            eta=meeting.date - timedelta(days=7),
+    meaningful = any(k in updates for k in ("date", "time", "venue", "title", "agenda"))
+    schedule_fields_changed = any(k in updates for k in ("date", "time"))
+
+    if meeting.status == MeetingStatus.CANCELLED:
+        background_tasks.add_task(
+            _meeting_sms_on_cancel_background,
+            str(meeting.id),
+            "Meeting cancelled by staff",
         )
-        safe_apply_async(
-            send_meeting_reminder,
-            args=[str(meeting.id), "D3"],
-            eta=meeting.date - timedelta(days=3),
+    elif meaningful and meeting.status == MeetingStatus.SCHEDULED and meeting.is_active:
+        # Always SMS parents about the update; reschedule reminders only if date/time changed
+        background_tasks.add_task(
+            _meeting_sms_on_update_background,
+            str(meeting.id),
+            old_date.isoformat(),
+            old_time,
+            old_venue,
+            schedule_fields_changed,
         )
-        eta_d0 = meeting.date.replace(hour=7, minute=0, second=0)
-        safe_apply_async(
-            send_meeting_reminder,
-            args=[str(meeting.id), "D0"],
-            eta=eta_d0,
-        )
-        background_tasks.add_task(_schedule_meeting_reminders_background, str(meeting.id))
-        # Send reschedule SMS (background)
-        from app.services.sms import send_sms
-        parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
-        phones = [p.phone for p in parents if p.phone]
-        message = f"UPDATED: The PTA meeting previously scheduled for {old_date.strftime('%d %b %Y')} has been rescheduled to {meeting.date.strftime('%d %b %Y')} at {meeting.time}, {meeting.venue}. —SchoolPulse"
-        for phone in phones:
-            # In production, use background task (e.g., celery)
-            pass  # We'll leave SMS sending to the caller or use a separate task
 
     log_staff_activity(
         db,
@@ -182,12 +212,23 @@ async def update_meeting(
         page_label="Meetings",
         action_label=f"Updated meeting: {meeting.title}",
     )
-    return {"success": True, "data": {"id": str(meeting_id), "updated": True}}
+    return {
+        "success": True,
+        "data": {
+            "id": str(meeting_id),
+            "updated": True,
+            "sms_jobs": reminder_plan_summary(meeting)
+            if meeting.status == MeetingStatus.SCHEDULED
+            else None,
+        },
+    }
+
 
 @router.post("/{meeting_id}/cancel")
 async def cancel_meeting(
     meeting_id: UUID,
     req: MeetingCancel,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("meetings")),
 ):
@@ -196,7 +237,9 @@ async def cancel_meeting(
         raise HTTPException(status_code=404)
     meeting.status = MeetingStatus.CANCELLED
     db.commit()
-    cancel_meeting_jobs(str(meeting_id), db)
+
+    background_tasks.add_task(_meeting_sms_on_cancel_background, str(meeting_id), req.reason)
+
     log_staff_activity(
         db,
         staff,
@@ -204,31 +247,47 @@ async def cancel_meeting(
         action_label=f"Cancelled meeting: {meeting.title}",
         details=req.reason,
     )
-    # Send cancellation SMS (background)
-    parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
-    phones = [p.phone for p in parents if p.phone]
-    message = f"The PTA meeting scheduled for {meeting.date.strftime('%d %b %Y')} has been cancelled. Reason: {req.reason}. —SchoolPulse"
-    for phone in phones:
-        # Use background task
-        pass
     return {"success": True, "data": {"message": "Meeting cancelled"}}
+
 
 @router.post("/{meeting_id}/send-agenda-sms")
 async def send_agenda_sms(
     meeting_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     staff=Depends(require_permission("meetings")),
 ):
+    from app.services.parent_directory import meeting_recipient_phones
+    from app.services.sms import send_sms_background
+    from app.models.sms_log import SmsLog
+
     meeting = db.query(Meeting).filter(Meeting.id == str(meeting_id)).first()
     if not meeting:
         raise HTTPException(status_code=404)
-    parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
-    phones = [p.phone for p in parents if p.phone]
-    message = f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: {meeting.agenda[:120]}... Full agenda on the SchoolPulse PTA app. —SchoolPulse"
+
+    phones = meeting_recipient_phones(db)
+    message = (
+        f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: "
+        f"{(meeting.agenda or '')[:120]}… Full agenda on the Mawuli PTA app. — Mawuli SHS PTA"
+    )
     for phone in phones:
-        # Use background task
-        pass
-    return {"success": True, "data": {"recipients_count": len(phones), "batches_queued": (len(phones)+99)//100}}
+        background_tasks.add_task(send_sms_background, phone, message)
+        db.add(
+            SmsLog(
+                message_type="MEETING_AGENDA",
+                recipient_phone=phone,
+                content=message,
+                status="QUEUED",
+            )
+        )
+    db.commit()
+    return {
+        "success": True,
+        "data": {
+            "recipients_count": len(phones),
+            "batches_queued": (len(phones) + 99) // 100 if phones else 0,
+        },
+    }
 
 
 @router.delete("/{meeting_id}")
@@ -292,22 +351,29 @@ async def upcoming_meetings(
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
-    now = datetime.utcnow()
-    meetings = (
+    """Return SCHEDULED meetings whose date+time has not passed yet (Africa/Accra)."""
+    candidates = (
         db.query(Meeting)
         .filter(
             Meeting.is_active == True,
             Meeting.status == MeetingStatus.SCHEDULED,
-            Meeting.date >= now,
         )
         .order_by(Meeting.date.asc())
-        .offset(skip)
-        .limit(limit)
         .all()
     )
+    now = datetime.now(ACCRA)
+    upcoming = []
+    for meeting in candidates:
+        try:
+            start = parse_meeting_start(meeting)
+            if start > now:
+                upcoming.append(meeting)
+        except Exception:
+            continue
+    sliced = upcoming[skip : skip + limit]
     return {
         "success": True,
-        "data": [_serialize_meeting(m) for m in meetings],
+        "data": [_serialize_meeting(m) for m in sliced],
     }
 
 

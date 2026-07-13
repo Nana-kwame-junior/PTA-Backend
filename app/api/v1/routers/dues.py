@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission, require_parent_match
@@ -18,6 +19,8 @@ from app.services.dues_balance import student_outstanding_summary
 
 router = APIRouter(prefix="/dues", tags=["Dues Configuration"])
 
+ACCRA = ZoneInfo("Africa/Accra")
+
 
 def _send_dues_announcement_background(dues_config_id: str) -> None:
     db = SessionLocal()
@@ -25,6 +28,35 @@ def _send_dues_announcement_background(dues_config_id: str) -> None:
         send_dues_sms_for_config(db, dues_config_id, "NEW")
     finally:
         db.close()
+
+
+def _dues_reminder_eta(due_date: datetime, *, days_offset: int, hour: int = 9) -> datetime | None:
+    """Build an Africa/Accra ETA at `hour`:00 on due_date + days_offset. Skip if already past."""
+    local = due_date
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=ACCRA)
+    else:
+        local = local.astimezone(ACCRA)
+    day = (local + timedelta(days=days_offset)).replace(
+        hour=hour, minute=0, second=0, microsecond=0
+    )
+    if day <= datetime.now(ACCRA):
+        return None
+    return day
+
+
+def _schedule_dues_reminders(dues: DuesConfig) -> None:
+    """Queue personalized outstanding-dues SMS: D3, D1, and OVERDUE (after grace)."""
+    dues_id = str(dues.id)
+    for reminder_type, days_offset in (("D3", -3), ("D1", -1)):
+        eta = _dues_reminder_eta(dues.due_date, days_offset=days_offset)
+        if eta:
+            safe_apply_async(send_dues_reminder, args=[dues_id, reminder_type], eta=eta)
+
+    overdue_offset = int(dues.grace_period_days or 0) + 1
+    overdue_eta = _dues_reminder_eta(dues.due_date, days_offset=overdue_offset)
+    if overdue_eta:
+        safe_apply_async(send_dues_reminder, args=[dues_id, "OVERDUE"], eta=overdue_eta)
 
 
 def _serialize_dues(row: DuesConfig) -> dict:
@@ -60,10 +92,7 @@ async def create_dues_config(
     db.refresh(dues)
 
     background_tasks.add_task(_send_dues_announcement_background, str(dues.id))
-    safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
-    safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-    overdue_eta = dues.due_date + timedelta(days=dues.grace_period_days + 1)
-    safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=overdue_eta)
+    _schedule_dues_reminders(dues)
 
     log_staff_activity(
         db,
@@ -156,10 +185,7 @@ async def update_dues_config(
         setattr(dues, key, value)
     db.commit()
     if req.due_date and req.due_date != old_due_date:
-        safe_apply_async(send_dues_reminder, args=[str(dues.id), "D3"], eta=dues.due_date - timedelta(days=3))
-        safe_apply_async(send_dues_reminder, args=[str(dues.id), "D1"], eta=dues.due_date - timedelta(days=1))
-        overdue_eta = dues.due_date + timedelta(days=dues.grace_period_days + 1)
-        safe_apply_async(send_dues_reminder, args=[str(dues.id), "OVERDUE"], eta=overdue_eta)
+        _schedule_dues_reminders(dues)
     log_staff_activity(
         db,
         staff,
