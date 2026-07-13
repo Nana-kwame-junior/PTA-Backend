@@ -538,6 +538,13 @@ async def link_additional_ward(
         req.ward_index_number,
         req.ward_stream,
     )
+    if result.get("match_result") == "PENDING_ADMIN_REVIEW":
+        result["message"] = (
+            "No match found for this ward. Please contact the school admin "
+            "(office or PTA chairperson) for a proper records check. "
+            "You cannot continue with status checks from the app until an admin links your child."
+        )
+        result["requires_admin_contact"] = True
     return {"success": True, "data": result}
 
 
