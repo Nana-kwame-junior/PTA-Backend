@@ -51,22 +51,16 @@ class Settings(BaseSettings):
     # Staging only: log verification codes in server logs instead of sending SMS
     sms_dry_run: bool = False
 
-    # ── Email (staff invitations) ──────────────────────────────────
-    # Supports both SMTP_* and MAIL_* env names (Gmail app passwords).
+    # ── Email (Brevo transactional API — staff invite / password reset) ─
     pta_chairperson_email: str = "chairperson@mawulishs.edu.gh"
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_pass: str = ""
-    mail_username: Optional[str] = None
-    mail_password: Optional[str] = None
+    brevo_api_key: str = ""
+    # Prefer BREVO_SENDER_EMAIL / BREVO_SENDER_NAME, or BREVO_FROM_EMAIL as "Name <email>"
+    brevo_sender_email: str = ""
+    brevo_sender_name: str = "SchoolPulse"
+    brevo_from_email: str = ""
+    # Optional legacy aliases (MAIL_FROM / MAIL_FROM_NAME still work as fallbacks)
     mail_from: Optional[str] = None
-    mail_port: Optional[int] = None
-    mail_server: Optional[str] = None
     mail_from_name: Optional[str] = None
-    mail_starttls: Optional[bool] = None
-    mail_ssl_tls: Optional[bool] = None
-    use_credentials: Optional[bool] = None
 
     # ── CORS ───────────────────────────────────────────────────────
     cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:3000"
@@ -96,40 +90,21 @@ class Settings(BaseSettings):
         self.celery_result_backend = ensure_rediss_ssl(self.celery_result_backend)
         return self
 
-    @property
-    def resolved_smtp_user(self) -> str:
-        return self.smtp_user or self.mail_username or self.mail_from or ""
+    def resolved_brevo_sender(self) -> tuple[str, str]:
+        """Return (email, display_name) for Brevo sender."""
+        raw = (self.brevo_from_email or "").strip()
+        if raw:
+            # Support "Display Name <addr@domain>" or bare email
+            if "<" in raw and raw.endswith(">"):
+                name_part, _, email_part = raw.partition("<")
+                email = email_part[:-1].strip()
+                name = name_part.strip().strip('"') or self.brevo_sender_name
+                return email, name
+            return raw, self.brevo_sender_name
 
-    @property
-    def resolved_smtp_pass(self) -> str:
-        return self.smtp_pass or self.mail_password or ""
-
-    @property
-    def resolved_smtp_host(self) -> str:
-        return self.mail_server or self.smtp_host
-
-    @property
-    def resolved_smtp_port(self) -> int:
-        return self.mail_port if self.mail_port is not None else self.smtp_port
-
-    @property
-    def smtp_from_address(self) -> str:
-        return self.mail_from or self.resolved_smtp_user
-
-    @property
-    def smtp_use_ssl(self) -> bool:
-        if self.mail_ssl_tls is True:
-            return True
-        if self.mail_ssl_tls is False:
-            return False
-        return self.resolved_smtp_port == 465
-
-    @property
-    def smtp_use_starttls(self) -> bool:
-        if self.mail_starttls is not None:
-            return bool(self.mail_starttls)
-        return not self.smtp_use_ssl and self.resolved_smtp_port == 587
-
+        email = (self.brevo_sender_email or self.mail_from or "").strip()
+        name = (self.brevo_sender_name or self.mail_from_name or "SchoolPulse").strip()
+        return email, name
 
 @lru_cache()
 def get_settings() -> Settings:

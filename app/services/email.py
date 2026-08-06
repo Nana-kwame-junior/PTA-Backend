@@ -1,54 +1,54 @@
 import logging
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from typing import ContextManager
+
+import httpx
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-def _smtp_client() -> ContextManager[smtplib.SMTP]:
-    host = settings.resolved_smtp_host
-    port = settings.resolved_smtp_port
-
-    if settings.smtp_use_ssl:
-        return smtplib.SMTP_SSL(host, port, timeout=30)
-
-    server = smtplib.SMTP(host, port, timeout=30)
-    if settings.smtp_use_starttls:
-        server.starttls()
-    return server
+BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
 
 
 def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
-    username = settings.resolved_smtp_user
-    password = settings.resolved_smtp_pass
+    api_key = (settings.brevo_api_key or "").strip()
+    from_addr, from_name = settings.resolved_brevo_sender()
 
-    if not username or not password:
-        logger.warning("Email not configured — skipped message to %s", to_email)
+    if not api_key or not from_addr:
+        logger.warning("Brevo email not configured — skipped message to %s", to_email)
         return False
 
-    from_addr = settings.smtp_from_address
-    from_header = (
-        f"{settings.mail_from_name} <{from_addr}>"
-        if settings.mail_from_name
-        else from_addr
-    )
+    sender: dict[str, str] = {"email": from_addr}
+    if from_name:
+        sender["name"] = from_name
 
-    msg = MIMEMultipart("alternative")
-    msg["From"] = from_header
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    payload = {
+        "sender": sender,
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_body,
+        "textContent": text_body,
+    }
 
     try:
-        with _smtp_client() as server:
-            server.login(username, password)
-            server.send_message(msg)
-        return True
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                BREVO_SEND_URL,
+                headers={
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                    "api-key": api_key,
+                },
+                json=payload,
+            )
+        if response.status_code in (200, 201):
+            return True
+        logger.error(
+            "Brevo email failed for %s: status=%s body=%s",
+            to_email,
+            response.status_code,
+            response.text[:500],
+        )
+        return False
     except Exception as exc:
         logger.exception("Failed to send email to %s: %s", to_email, exc)
         return False
