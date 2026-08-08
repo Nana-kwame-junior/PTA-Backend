@@ -13,21 +13,43 @@ if _raw.startswith("postgresql+"):
 else:
     _url_str = _raw.replace("postgresql://", "postgresql+psycopg://", 1)
 
+_host = None
+_dbname = None
+_driver = None
+_is_localhost = False
 try:
     _url = make_url(_url_str)
 except Exception:
     _url = _url_str  # fall back; create_engine will raise a clearer error later
 else:
+    _host = getattr(_url, "host", None)
+    _dbname = getattr(_url, "database", None)
+    _driver = getattr(_url, "drivername", None)
+    _is_localhost = _host in (
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "",
+        None,
+    )
+
+if _is_localhost:
+    logger.warning(
+        "DB engine is targeting localhost (host=%r, db=%r, driver=%r). "
+        "If this is production check that DATABASE_URL / DATABASE_URL_SYNC "
+        "env vars are injected correctly.",
+        _host,
+        _dbname,
+        _driver,
+    )
+else:
     # Log just host/db, never the password, for deploy debugging.
-    try:
-        logger.info(
-            "DB engine configured: host=%s db=%s driver=%s",
-            getattr(_url, "host", None),
-            getattr(_url, "database", None),
-            getattr(_url, "drivername", None),
-        )
-    except Exception:
-        pass
+    logger.info(
+        "DB engine configured: host=%s db=%s driver=%s",
+        _host,
+        _dbname,
+        _driver,
+    )
 
 engine = create_engine(
     _url,

@@ -5,6 +5,12 @@ from pydantic import model_validator
 
 from app.core.redis_url import ensure_rediss_ssl
 
+# Built-in defaults (used when NO env var or .env value is provided).
+# Kept as module-level constants so the "user explicitly provided a value" check below
+# can distinguish a Railway env injection from the Pydantic fallback default.
+_DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5432/pta"
+_DEFAULT_DATABASE_URL_SYNC = "postgresql://postgres:password@localhost:5432/pta"
+
 
 class Settings(BaseSettings):
     # ── App ────────────────────────────────────────────────────────
@@ -17,8 +23,12 @@ class Settings(BaseSettings):
     dashboard_url: str = "http://localhost:5173"
 
     # ── Database ───────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/pta"
-    database_url_sync: str = "postgresql://postgres:password@localhost:5432/pta"
+    # Setting either one of DATABASE_URL / DATABASE_URL_SYNC is enough — the other
+    # is derived automatically in `_resolve_database_urls` below. This allows
+    # platforms that only inject a standard `DATABASE_URL` (Railway, Render, etc.)
+    # to work without requiring a second app-specific env var.
+    database_url: str = _DEFAULT_DATABASE_URL
+    database_url_sync: str = _DEFAULT_DATABASE_URL_SYNC
 
     # ── Redis ──────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -82,6 +92,44 @@ class Settings(BaseSettings):
     current_academic_year: str = "2024/2025"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _resolve_database_urls(self):
+        """Derive missing DB URLs so the caller only needs to provide ONE of them."""
+        async_url = self.database_url
+        sync_url = self.database_url_sync
+
+        async_is_default = async_url == _DEFAULT_DATABASE_URL
+        sync_is_default = sync_url == _DEFAULT_DATABASE_URL_SYNC
+
+        if not async_is_default and sync_is_default:
+            # User provided only the async URL — derive the sync URL by replacing
+            # the async driver suffix (+asyncpg / +aiopg / +psycopg_async etc.)
+            # with a plain psycopg sync driver.
+            derived = (
+                async_url
+                .replace("postgresql+asyncpg://", "postgresql://", 1)
+                .replace("postgresql+psycopg_async://", "postgresql://", 1)
+                .replace("postgresql+aiopg://", "postgresql://", 1)
+                .replace("postgres+asyncpg://", "postgres://", 1)
+            )
+            # If after stripping the async suffix the scheme is still "postgresql://"
+            # (it will be), leave it; database.py will add +psycopg driver if missing.
+            self.database_url_sync = derived
+        elif async_is_default and not sync_is_default:
+            # User provided only the sync URL — derive the async URL with the
+            # asyncpg driver suffix (the engine used throughout this app).
+            derived = (
+                sync_url
+                .replace("postgresql+psycopg://", "postgresql://", 1)
+                .replace("postgresql+psycopg2://", "postgresql://", 1)
+                .replace("postgres://", "postgresql://", 1)
+            )
+            if derived.startswith("postgresql://"):
+                derived = derived.replace("postgresql://", "postgresql+asyncpg://", 1)
+            self.database_url = derived
+        # If both provided or both defaulted, leave as-is.
+        return self
 
     @model_validator(mode="after")
     def _normalize_redis_urls(self):
