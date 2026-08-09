@@ -1,4 +1,4 @@
-"""Canonical class level names for Ghana PTA (KG → Primary → JHS)."""
+"""Canonical class level names for Ghana PTA (KG → Primary → JHS → SHS Form)."""
 
 import re
 
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.class_level import ClassLevel
 
 JHS_NUMBERED = re.compile(r"^JHS [123]$")
+FORM_NUMBERED = re.compile(r"^Form [123]$")
 
 STUDENT_FORM_ALIASES = {
     "kg 1": "KG",
@@ -43,12 +44,24 @@ def normalize_class_level_name(raw: str) -> str:
             raise ValueError("JHS levels must be JHS 1, JHS 2, or JHS 3")
         return f"JHS {n}"
 
-    if re.match(r"^form\s*(\d+)$", lower):
-        raise ValueError("Use JHS 1–3 only (Form levels are not supported)")
+    # SHS levels (Form 1–3); also accept "SHS 1" style input.
+    form = re.match(r"^form\s*(\d+)$", lower)
+    if form:
+        n = int(form.group(1))
+        if n < 1 or n > 3:
+            raise ValueError("SHS Form levels must be Form 1, Form 2, or Form 3")
+        return f"Form {n}"
+
+    shs = re.match(r"^shs\s*(\d+)$", lower)
+    if shs:
+        n = int(shs.group(1))
+        if n < 1 or n > 3:
+            raise ValueError("SHS levels must be SHS 1, SHS 2, or SHS 3 (maps to Form 1–3)")
+        return f"Form {n}"
 
     raise ValueError(
-        "Use KG, Primary 1–6, or JHS 1–3 only "
-        "(e.g. jhs 1, primary 3, kg)"
+        "Use KG, Primary 1–6, JHS 1–3, or Form 1–3 "
+        "(e.g. jhs 1, form 2, primary 3, kg)"
     )
 
 
@@ -58,15 +71,6 @@ def normalize_student_form_name(form: str) -> str:
     lower = name.lower()
     if lower in STUDENT_FORM_ALIASES:
         return STUDENT_FORM_ALIASES[lower]
-
-    # Legacy CSV/import: map Form N → JHS N (admin cannot create Form levels).
-    legacy_form = re.match(r"^form\s*(\d+)$", lower)
-    if legacy_form:
-        n = int(legacy_form.group(1))
-        if n < 1 or n > 3:
-            raise ValueError("Legacy Form levels must be Form 1, Form 2, or Form 3")
-        return f"JHS {n}"
-
     return normalize_class_level_name(form)
 
 
@@ -76,7 +80,7 @@ def assert_secondary_naming_allowed(
     *,
     exclude_id: str | None = None,
 ) -> None:
-    """Reserved for future constraints; Form levels are rejected at normalization."""
+    """Reserved for future constraints."""
     _ = (db, normalized_name, exclude_id)
 
 

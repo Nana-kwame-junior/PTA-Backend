@@ -12,7 +12,7 @@ from app.models.class_level import ClassLevel
 
 ACADEMIC_YEAR = "2024/2025"
 
-# PTA covers KG → Primary → JHS only (no Form/SHS levels).
+# PTA ladder: KG → Primary → JHS → SHS Form (programme required for Form levels).
 DEFAULT_CLASS_LEVELS = [
     {"name": "KG", "sequence": 1, "requires_index_number": False, "requires_stream": False},
     {"name": "Primary 1", "sequence": 2, "requires_index_number": False, "requires_stream": False},
@@ -24,51 +24,149 @@ DEFAULT_CLASS_LEVELS = [
     {"name": "JHS 1", "sequence": 8, "requires_index_number": False, "requires_stream": False},
     {"name": "JHS 2", "sequence": 9, "requires_index_number": False, "requires_stream": False},
     {"name": "JHS 3", "sequence": 10, "is_terminal": True, "requires_index_number": True, "requires_stream": False},
+    {"name": "Form 1", "sequence": 11, "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 2", "sequence": 12, "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 3", "sequence": 13, "is_terminal": True, "requires_index_number": True, "requires_stream": True},
 ]
 
-# Wards for mobile parent registration testing (parent records are created via the app).
-STUDENTS = [
-    {
-        "index_number": None,
-        "full_name": "Ama Adjei",
-        "gender": "F",
-        "form": "KG",
-        "stream": None,
-        "parent_phone_1": "+233241234567",
-    },
-    {
-        "index_number": None,
-        "full_name": "Kwame Adjei",
-        "gender": "M",
-        "form": "Primary 2",
-        "stream": None,
-        "parent_phone_1": "+233241234567",
-    },
-    {
-        "index_number": "0111025007",
-        "full_name": "Yaw Ofori",
-        "gender": "M",
-        "form": "JHS 2",
-        "stream": None,
-        "parent_phone_1": "+233551234567",
-    },
-    {
-        "index_number": "0111025099",
-        "full_name": "Efua Darko",
-        "gender": "F",
-        "form": "JHS 3",
-        "stream": None,
-        "parent_phone_1": "+233501234567",
-    },
-    {
-        "index_number": None,
-        "full_name": "Kofi Mensah",
-        "gender": "M",
-        "form": "JHS 1",
-        "stream": None,
-        "parent_phone_1": "+233244567890",
-    },
+SHS_PROGRAMMES = [
+    "General Science",
+    "General Arts",
+    "Business",
+    "Visual Arts",
+    "Home Economics",
+    "Agricultural Science",
 ]
+
+FIRST_NAMES_M = [
+    "Kwame", "Kofi", "Yaw", "Kojo", "Kwesi", "Fiifi", "Kwabena", "Ato",
+    "Nana", "Mensah", "Ebo", "Papa", "Kobina", "Kweku", "Adom",
+]
+FIRST_NAMES_F = [
+    "Ama", "Akosua", "Abena", "Adwoa", "Afua", "Akua", "Yaa", "Efua",
+    "Esi", "Maame", "Serwaa", "Adjoa", "Pokua", "Afi", "Naana",
+]
+SURNAMES = [
+    "Mensah", "Owusu", "Asante", "Boateng", "Osei", "Adjei", "Darko",
+    "Ofori", "Appiah", "Amoah", "Frimpong", "Agyeman", "Nkrumah", "Addo",
+    "Sarpong", "Gyasi", "Amponsah", "Tetteh", "Quaye", "Annan", "Baah",
+    "Acheampong", "Opoku", "Danso", "Kusi",
+]
+
+
+def _phone(n: int) -> str:
+    # Stable fake Ghana numbers in +23324xxxxxxx range
+    return f"+23324{1000000 + n:07d}"
+
+
+def _bece_index(n: int) -> str:
+    return f"01110{25000 + n:05d}"
+
+
+def build_students() -> list[dict]:
+    """Build ~50 demo students across KG–Primary–JHS–SHS."""
+    students: list[dict] = []
+    counter = 1
+
+    # ── Hand-picked mobile test wards (kept for registration scenarios) ──
+    students.extend(
+        [
+            {
+                "index_number": None,
+                "full_name": "Ama Adjei",
+                "gender": "F",
+                "form": "KG",
+                "stream": None,
+                "parent_phone_1": "+233241234567",
+            },
+            {
+                "index_number": None,
+                "full_name": "Kwame Adjei",
+                "gender": "M",
+                "form": "Primary 2",
+                "stream": None,
+                "parent_phone_1": "+233241234567",
+            },
+            {
+                "index_number": "0111025007",
+                "full_name": "Yaw Ofori",
+                "gender": "M",
+                "form": "JHS 2",
+                "stream": None,
+                "parent_phone_1": "+233551234567",
+            },
+            {
+                "index_number": "0111025099",
+                "full_name": "Efua Darko",
+                "gender": "F",
+                "form": "JHS 3",
+                "stream": None,
+                "parent_phone_1": "+233501234567",
+            },
+            {
+                "index_number": None,
+                "full_name": "Kofi Mensah",
+                "gender": "M",
+                "form": "JHS 1",
+                "stream": None,
+                "parent_phone_1": "+233244567890",
+            },
+        ]
+    )
+
+    # ── Extra lower-school students (10) ──
+    lower_levels = [
+        "KG", "Primary 1", "Primary 2", "Primary 3", "Primary 4",
+        "Primary 5", "Primary 6", "JHS 1", "JHS 2", "JHS 3",
+    ]
+    for i, form in enumerate(lower_levels):
+        gender = "F" if i % 2 == 0 else "M"
+        first = FIRST_NAMES_F[i % len(FIRST_NAMES_F)] if gender == "F" else FIRST_NAMES_M[i % len(FIRST_NAMES_M)]
+        surname = SURNAMES[i % len(SURNAMES)]
+        needs_index = form == "JHS 3"
+        students.append(
+            {
+                "index_number": _bece_index(counter) if needs_index else None,
+                "full_name": f"{first} {surname}",
+                "gender": gender,
+                "form": form,
+                "stream": None,
+                "parent_phone_1": _phone(counter),
+            }
+        )
+        counter += 1
+
+    # ── SHS Form students with programmes (~35 → total ≈ 50) ──
+    shs_targets = (
+        [("Form 1", 12)]
+        + [("Form 2", 12)]
+        + [("Form 3", 11)]
+    )
+    name_i = 0
+    for form, count in shs_targets:
+        for _ in range(count):
+            gender = "F" if name_i % 2 == 0 else "M"
+            firsts = FIRST_NAMES_F if gender == "F" else FIRST_NAMES_M
+            first = firsts[name_i % len(firsts)]
+            surname = SURNAMES[(name_i * 3) % len(SURNAMES)]
+            programme = SHS_PROGRAMMES[name_i % len(SHS_PROGRAMMES)]
+            students.append(
+                {
+                    "index_number": _bece_index(100 + counter),
+                    "full_name": f"{first} {surname}",
+                    "gender": gender,
+                    "form": form,
+                    "stream": programme,
+                    "parent_phone_1": _phone(200 + counter),
+                }
+            )
+            counter += 1
+            name_i += 1
+
+    return students
+
+
+STUDENTS = build_students()
 
 MOBILE_TEST_GUIDE = """
 Mobile parent registration test data
@@ -91,6 +189,10 @@ Scenario C — JHS 3 ward (10-digit BECE index):
   Ward name: Efua Darko
   Ward class: JHS 3
   Index: 0111025099
+
+SHS wards use Form 1–3 and must include a programme
+(General Science, General Arts, Business, Visual Arts,
+Home Economics, or Agricultural Science).
 
 Use OTP from SMS (or Redis in dev) after POST /auth/parent/request-otp.
 """
@@ -134,6 +236,8 @@ def seed():
         else:
             print("Academic term: Term 1 already exists")
 
+        # Only one terminal level allowed in practice; keep Form 3 as SHS terminal
+        # and clear is_terminal on JHS 3 when Form 3 exists.
         level_count = 0
         for row in DEFAULT_CLASS_LEVELS:
             existing = db.query(ClassLevel).filter(ClassLevel.name == row["name"]).first()
@@ -141,14 +245,19 @@ def seed():
                 for key in ("requires_index_number", "requires_stream", "is_terminal", "sequence"):
                     if key in row:
                         setattr(existing, key, row[key])
+                existing.is_active = True
                 continue
             db.add(ClassLevel(**row, is_active=True))
             level_count += 1
+        # Prefer a single terminal flag: Form 3 for SHS schools.
+        jhs3 = db.query(ClassLevel).filter(ClassLevel.name == "JHS 3").first()
+        if jhs3:
+            jhs3.is_terminal = False
         db.commit()
         if level_count:
             print(f"Class levels: created {level_count}")
         else:
-            print("Class levels: updated/seeded")
+            print("Class levels: updated/seeded (incl. Form 1–3)")
 
         student_count = 0
         for row in STUDENTS:
@@ -169,6 +278,10 @@ def seed():
                     .first()
                 )
             if existing:
+                # Keep SHS programme in sync if re-run.
+                if row.get("stream") and existing.stream != row["stream"]:
+                    existing.stream = row["stream"]
+                    existing.form = row["form"]
                 continue
             db.add(
                 Student(
@@ -282,12 +395,23 @@ def seed():
         print(f"Meetings: added {mtg_added} new")
 
         total_students = db.query(Student).count()
+        shs_students = (
+            db.query(Student)
+            .filter(Student.form.in_(["Form 1", "Form 2", "Form 3"]))
+            .count()
+        )
+        with_programme = (
+            db.query(Student)
+            .filter(Student.stream.isnot(None), Student.stream != "")
+            .count()
+        )
         total_dues = db.query(DuesConfig).count()
         total_ann = db.query(Announcement).count()
         total_mtg = db.query(Meeting).count()
         print(
-            f"\nTable counts — students: {total_students}, dues: {total_dues}, "
-            f"announcements: {total_ann}, meetings: {total_mtg}"
+            f"\nTable counts — students: {total_students} "
+            f"(SHS/Form: {shs_students}, with programme: {with_programme}), "
+            f"dues: {total_dues}, announcements: {total_ann}, meetings: {total_mtg}"
         )
         print(MOBILE_TEST_GUIDE)
     finally:
