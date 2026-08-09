@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.academic import AcademicTerm
+from app.models.class_level import Track
 from app.models.dues_config import DuesConfig
 from app.models.manual_payment import ManualPayment, ManualPaymentMode
 from app.models.payment import Payment, PaymentStatus
@@ -80,18 +81,19 @@ def student_term_dues_balance(
     }
 
 
-def get_current_academic_term(db: Session) -> AcademicTerm | None:
-    return db.query(AcademicTerm).filter(AcademicTerm.is_current == True).first()
+def get_current_academic_term(db: Session, track: Track) -> AcademicTerm | None:
+    return db.query(AcademicTerm).filter(AcademicTerm.is_current == True, AcademicTerm.track == track).first()
 
 
 def student_outstanding_summary(
     db: Session,
     *,
     student_id: str,
+    track: Track,
     current_term: AcademicTerm | None = None,
 ) -> dict:
     """Outstanding dues for a student: current term + unpaid prior terms in the same year."""
-    current_term = current_term or get_current_academic_term(db)
+    current_term = current_term or get_current_academic_term(db, track)
     if not current_term:
         return {
             "student_id": student_id,
@@ -179,6 +181,7 @@ def apply_payment_fifo(
     db: Session,
     *,
     student_id: str,
+    track: Track,
     amount,
     payment_date,
     recorded_by_user_id: str,
@@ -195,7 +198,7 @@ def apply_payment_fifo(
     Apply a payment oldest-term-first across outstanding balances in the current academic year.
     Returns manual payment rows created for arrear terms and the portion left for the current term.
     """
-    current_term = get_current_academic_term(db)
+    current_term = get_current_academic_term(db, track)
     if not current_term:
         return [], Decimal(str(amount))
 
@@ -279,6 +282,7 @@ def apply_online_payment_allocations(
     student = student or db.query(Student).filter(Student.id == payment.student_id).first()
     if not student:
         return
+    track = student.track if student.track else Track.BASIC
 
     note_prefix = f"Online:{payment.paystack_reference}"
     existing = (
@@ -292,6 +296,7 @@ def apply_online_payment_allocations(
     apply_payment_fifo(
         db,
         student_id=student.id,
+        track=track,
         amount=payment.amount_ghs,
         payment_date=payment.paid_at or payment.created_at,
         recorded_by_user_id="online",

@@ -4,8 +4,11 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.v1.dependencies import require_permission
 from app.models.student import Student
-from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest
+from app.models.academic import AcademicYear
+from app.models.class_level import ClassLevel, Track
+from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest, EnrollShsRequest
 from app.services.student_validation import validate_student_fields, normalize_gender, normalize_form_name
+from app.services.class_level_names import find_class_level
 from app.services.activity_log import log_staff_activity
 import csv
 import io
@@ -22,10 +25,13 @@ def _serialize_student(student: Student) -> dict:
         "gender": student.gender,
         "form": student.form,
         "stream": student.stream,
+        "track": str(student.track.value) if hasattr(student.track, 'value') else str(student.track) if student.track else None,
         "academic_year": student.academic_year,
         "parent_phone_1": student.parent_phone_1,
         "parent_phone_2": student.parent_phone_2,
         "is_active": student.is_active,
+        "graduated_basic_at": student.graduated_basic_at.isoformat() if student.graduated_basic_at else None,
+        "graduated_shs_at": student.graduated_shs_at.isoformat() if student.graduated_shs_at else None,
     }
 
 
@@ -81,12 +87,15 @@ async def import_students(
                 dup = db.query(Student).filter(Student.index_number == idx).first()
                 if dup:
                     raise ValueError(f"Duplicate index number {idx}")
+            _level = find_class_level(db, form_name)
+            _form_track = _level.track if _level else Track.BASIC
             student = Student(
                 index_number=idx,
                 full_name=normalized_row["full_name"],
                 gender=gender,
                 form=form_name,
                 stream=strm,
+                track=_form_track,
                 academic_year=academic_year.strip(),
                 parent_phone_1=normalized_row.get("parent_phone_1") or None,
                 parent_phone_2=normalized_row.get("parent_phone_2") or None,
@@ -192,12 +201,15 @@ async def create_student(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    _level = find_class_level(db, form_name)
+    _form_track = _level.track if _level else Track.BASIC
     student = Student(
         index_number=idx,
         full_name=data.full_name.strip(),
         gender=gender,
         form=form_name,
         stream=strm,
+        track=_form_track,
         academic_year=data.academic_year,
         parent_phone_1=data.parent_phone_1,
         parent_phone_2=data.parent_phone_2,
@@ -243,6 +255,10 @@ async def update_student(
     payload["gender"] = g
     for key, value in payload.items():
         setattr(student, key, value)
+    if "form" in payload:
+        lvl = find_class_level(db, form)
+        if lvl:
+            student.track = lvl.track
     db.commit()
     log_staff_activity(
         db,
@@ -274,3 +290,63 @@ async def delete_student(
         details="Soft deleted — record kept inactive",
     )
     return {"success": True, "data": {"message": "Student deactivated"}}
+
+
+@router.post("/{student_id}/enroll-shs")
+async def enroll_student_in_shs(
+    student_id: UUID,
+    data: EnrollShsRequest,
+    db: Session = Depends(get_db),
+    staff=Depends(require_permission("students")),
+):
+    student = db.query(Student).filter(Student.id == str(student_id)).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if student.graduated_basic_at is None:
+        raise HTTPException(status_code=400, detail="Student must have graduated JHS 3 / Basic education first (graduated_basic_at missing)")
+    if student.graduated_shs_at is not None:
+        raise HTTPException(status_code=400, detail="Student has already completed SHS — cannot re-enroll")
+    if student.is_active:
+        raise HTTPException(status_code=400, detail="Student is still active in Basic track — close the term and let Basic graduation deactivate first")
+
+    year = db.query(AcademicYear).filter(AcademicYear.id == str(data.academic_year_id)).first()
+    if not year:
+        raise HTTPException(status_code=400, detail="academic_year_id not found")
+    if year.track != Track.SHS:
+        raise HTTPException(status_code=400, detail=f"Target academic year {year.label!r} is not marked track=SHS")
+
+    level = db.query(ClassLevel).filter(ClassLevel.id == str(data.class_level_id)).first()
+    if not level:
+        raise HTTPException(status_code=400, detail="class_level_id not found")
+    if level.track != Track.SHS or level.name.strip() != "Form 1":
+        raise HTTPException(status_code=400, detail="SHS enrollment must target the Form 1 (SHS track) class level")
+
+    if level.requires_stream:
+        stream_val = (data.stream or "").strip() or None
+        if not stream_val:
+            raise HTTPException(status_code=400, detail=f"Programme/stream is required for {level.name} (e.g. General Arts, General Science, Business)")
+    else:
+        stream_val = None
+
+    student.is_active = True
+    student.form = "Form 1"
+    student.track = Track.SHS
+    student.stream = stream_val
+    student.academic_year = year.label
+
+    db.commit()
+    db.refresh(student)
+
+    try:
+        from app.services.activity_log import log_staff_activity
+        log_staff_activity(
+            db, staff,
+            page_label="Students",
+            action_label=f"Enrolled {student.full_name} into SHS Form 1",
+            details=f"year={year.label}, stream={stream_val or 'N/A'}"
+        )
+    except Exception:
+        pass
+
+    return {"success": True, "data": _serialize_student(student)}

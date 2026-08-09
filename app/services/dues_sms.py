@@ -13,6 +13,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.models.academic import AcademicTerm
+from app.models.class_level import Track
 from app.models.dues_config import DuesConfig
 from app.models.sms_log import SmsLog
 from app.models.student import Student
@@ -63,9 +64,11 @@ def students_with_outstanding_for_dues(db: Session, dues: DuesConfig) -> list[tu
     )
     for student in students:
         if term_row:
+            track = student.track if student.track is not None else Track.BASIC
             summary = student_outstanding_summary(
                 db,
                 student_id=student.id,
+                track=track,
                 current_term=term_row,
             )
             amount = Decimal(summary["total_due_ghs"])

@@ -30,6 +30,7 @@ from app.services.dues_balance import (
     apply_payment_fifo,
     format_payment_sms,
 )
+from app.models.class_level import Track
 
 router = APIRouter(prefix="/payments/manual", tags=["Manual Payments"])
 logger = logging.getLogger(__name__)
@@ -83,13 +84,15 @@ async def record_manual_payment(
     parent_phones = list(dict.fromkeys(parent_phones))
     parent_phone = parent_phones[0] if parent_phones else None
 
-    balance_info = student_outstanding_summary(db, student_id=student.id)
+    track = student.track if student.track else Track.BASIC
+    balance_info = student_outstanding_summary(db, student_id=student.id, track=track)
     balance_before = Decimal(balance_info["total_due_ghs"])
     
     receipt_number = generate_receipt_number(db)
     arrear_rows, current_portion = apply_payment_fifo(
         db,
         student_id=student.id,
+        track=track,
         amount=req.amount_ghs,
         payment_date=req.payment_date,
         recorded_by_user_id=staff["id"],

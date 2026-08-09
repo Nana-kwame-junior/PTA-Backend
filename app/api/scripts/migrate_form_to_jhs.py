@@ -4,7 +4,7 @@ import re
 
 from app.api.scripts.seed_demo_data import DEFAULT_CLASS_LEVELS
 from app.core.database import SessionLocal
-from app.models.class_level import ClassLevel
+from app.models.class_level import ClassLevel, Track
 from app.models.student import Student
 from app.services.class_level_names import normalize_student_form_name
 
@@ -19,7 +19,7 @@ def ensure_jhs_class_levels(db) -> int:
         existing = db.query(ClassLevel).filter(ClassLevel.name == row["name"]).first()
         if existing:
             existing.is_active = True
-            for key in ("requires_index_number", "requires_stream", "is_terminal", "sequence"):
+            for key in ("track", "requires_index_number", "requires_stream", "is_terminal", "sequence"):
                 if key in row:
                     setattr(existing, key, row[key])
             continue

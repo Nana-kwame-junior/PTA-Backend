@@ -8,25 +8,25 @@ from app.models.dues_config import DuesConfig
 from app.models.announcement import Announcement, AnnouncementType
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
-from app.models.class_level import ClassLevel
+from app.models.class_level import ClassLevel, Track
 
 ACADEMIC_YEAR = "2024/2025"
 
 # PTA ladder: KG → Primary → JHS → SHS Form (programme required for Form levels).
 DEFAULT_CLASS_LEVELS = [
-    {"name": "KG", "sequence": 1, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 1", "sequence": 2, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 2", "sequence": 3, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 3", "sequence": 4, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 4", "sequence": 5, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 5", "sequence": 6, "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 6", "sequence": 7, "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 1", "sequence": 8, "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 2", "sequence": 9, "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 3", "sequence": 10, "is_terminal": True, "requires_index_number": True, "requires_stream": False},
-    {"name": "Form 1", "sequence": 11, "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 2", "sequence": 12, "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 3", "sequence": 13, "is_terminal": True, "requires_index_number": True, "requires_stream": True},
+    {"name": "KG", "sequence": 1, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 1", "sequence": 2, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 2", "sequence": 3, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 3", "sequence": 4, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 4", "sequence": 5, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 5", "sequence": 6, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 6", "sequence": 7, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 1", "sequence": 8, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 2", "sequence": 9, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 3", "sequence": 10, "track": "BASIC", "is_terminal": True, "requires_index_number": True, "requires_stream": False},
+    {"name": "Form 1", "sequence": 11, "track": "SHS", "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 2", "sequence": 12, "track": "SHS", "requires_index_number": True, "requires_stream": True},
+    {"name": "Form 3", "sequence": 13, "track": "SHS", "is_terminal": True, "requires_index_number": True, "requires_stream": True},
 ]
 
 SHS_PROGRAMMES = [
@@ -236,23 +236,17 @@ def seed():
         else:
             print("Academic term: Term 1 already exists")
 
-        # Only one terminal level allowed in practice; keep Form 3 as SHS terminal
-        # and clear is_terminal on JHS 3 when Form 3 exists.
         level_count = 0
         for row in DEFAULT_CLASS_LEVELS:
             existing = db.query(ClassLevel).filter(ClassLevel.name == row["name"]).first()
             if existing:
-                for key in ("requires_index_number", "requires_stream", "is_terminal", "sequence"):
+                for key in ("track", "requires_index_number", "requires_stream", "is_terminal", "sequence"):
                     if key in row:
                         setattr(existing, key, row[key])
                 existing.is_active = True
                 continue
             db.add(ClassLevel(**row, is_active=True))
             level_count += 1
-        # Prefer a single terminal flag: Form 3 for SHS schools.
-        jhs3 = db.query(ClassLevel).filter(ClassLevel.name == "JHS 3").first()
-        if jhs3:
-            jhs3.is_terminal = False
         db.commit()
         if level_count:
             print(f"Class levels: created {level_count}")
@@ -283,6 +277,11 @@ def seed():
                     existing.stream = row["stream"]
                     existing.form = row["form"]
                 continue
+            _form = row["form"]
+            if _form.startswith("Form "):
+                _track = "SHS"
+            else:
+                _track = "BASIC"
             db.add(
                 Student(
                     index_number=row.get("index_number"),
@@ -290,6 +289,7 @@ def seed():
                     gender=row.get("gender"),
                     form=row["form"],
                     stream=row.get("stream"),
+                    track=_track,
                     academic_year=ACADEMIC_YEAR,
                     parent_phone_1=row["parent_phone_1"],
                     is_active=True,
@@ -298,6 +298,18 @@ def seed():
             student_count += 1
         db.commit()
         print(f"Students: added {student_count} new (sample set: {len(STUDENTS)})")
+
+        for s in db.query(Student).all():
+            if not s.form:
+                continue
+            from app.services.class_level_names import find_class_level
+            lvl = find_class_level(db, s.form)
+            if lvl and (s.track is None or str(getattr(s.track, 'value', s.track)) != str(lvl.track.value)):
+                try:
+                    s.track = lvl.track
+                except Exception:
+                    pass
+        db.commit()
 
         dues = (
             db.query(DuesConfig)

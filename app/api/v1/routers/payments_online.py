@@ -28,6 +28,7 @@ from app.services.dues_balance import (
     apply_online_payment_allocations,
     format_payment_sms,
 )
+from app.models.class_level import Track
 from app.services.pdf import generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -86,7 +87,8 @@ async def _mark_payment_completed(payment: Payment, db: Session, background_task
             student=student,
             parent_phone=parent.phone,
         )
-        summary = student_outstanding_summary(db, student_id=student.id)
+        track = student.track if student.track else Track.BASIC
+        summary = student_outstanding_summary(db, student_id=student.id, track=track)
         balance_after = Decimal(summary["total_due_ghs"])
         balance_before = balance_after + Decimal(str(payment.amount_ghs))
         message = format_payment_sms(
@@ -147,7 +149,8 @@ async def initiate_payment(
     if not dues_config:
         raise HTTPException(status_code=404, detail="Dues configuration not found")
 
-    outstanding = student_outstanding_summary(db, student_id=str(req.student_id))
+    track = student.track if student.track else Track.BASIC
+    outstanding = student_outstanding_summary(db, student_id=str(req.student_id), track=track)
     total_due = Decimal(outstanding["total_due_ghs"])
     if total_due <= 0:
         raise HTTPException(status_code=409, detail="All dues are paid for this student")

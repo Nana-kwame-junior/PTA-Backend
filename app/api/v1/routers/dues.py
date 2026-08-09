@@ -16,6 +16,7 @@ from app.workers.sms_tasks import send_dues_reminder
 from app.services.dues_sms import send_dues_sms_for_config
 from app.services.task_queue import safe_apply_async
 from app.services.dues_balance import student_outstanding_summary
+from app.models.class_level import Track
 
 router = APIRouter(prefix="/dues", tags=["Dues Configuration"])
 
@@ -121,9 +122,15 @@ async def list_dues_configs(
 
 
 @router.get("/current")
-async def get_current_dues(db: Session = Depends(get_db)):
+async def get_current_dues(
+    track: Track = Track.BASIC,
+    db: Session = Depends(get_db),
+):
     """Public — current dues for the active academic term."""
-    current_term = db.query(AcademicTerm).filter(AcademicTerm.is_current == True).first()
+    current_term = db.query(AcademicTerm).filter(
+        AcademicTerm.is_current == True,
+        AcademicTerm.track == track,
+    ).first()
     query = db.query(DuesConfig).filter(DuesConfig.is_active == True)
     if current_term:
         query = query.filter(
@@ -147,7 +154,8 @@ async def get_student_outstanding(
     student = db.query(Student).filter(Student.id == str(student_id)).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    summary = student_outstanding_summary(db, student_id=str(student_id))
+    track = student.track if student.track else Track.BASIC
+    summary = student_outstanding_summary(db, student_id=str(student_id), track=track)
     summary["student_name"] = student.full_name
     summary["student_index_number"] = student.index_number
     return {"success": True, "data": summary}
@@ -163,7 +171,8 @@ async def get_parent_outstanding(
         student = db.query(Student).filter(Student.id == student_id, Student.is_active == True).first()
         if not student:
             continue
-        summary = student_outstanding_summary(db, student_id=student.id)
+        track = student.track if student.track else Track.BASIC
+        summary = student_outstanding_summary(db, student_id=student.id, track=track)
         summary["student_name"] = student.full_name
         summary["student_index_number"] = student.index_number
         wards.append(summary)

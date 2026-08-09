@@ -28,3 +28,9 @@ class StudentUpdate(BaseModel):
 class LinkParentRequest(BaseModel):
     parent_id: UUID
     relationship: str
+
+
+class EnrollShsRequest(BaseModel):
+    academic_year_id: UUID
+    class_level_id: UUID
+    stream: str

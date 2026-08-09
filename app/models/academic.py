@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum as SQLEnum, UniqueConstraint
 from app.core.database import Base
+from app.models.class_level import Track
 import uuid
 from datetime import datetime
 import enum
@@ -16,6 +17,7 @@ class AcademicYear(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     label = Column(String(20), unique=True, nullable=False)
+    track = Column(SQLEnum(Track, name="classleveltrack"), nullable=False, default=Track.BASIC)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -27,6 +29,7 @@ class AcademicTerm(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     academic_year_id = Column(String(36), ForeignKey("academic_years.id"), nullable=False)
     academic_year = Column(String(20), nullable=False)
+    track = Column(SQLEnum(Track, name="classleveltrack"), nullable=False, default=Track.BASIC)
     name = Column(String(20), nullable=False)
     sequence = Column(Integer, nullable=False)
     start_date = Column(DateTime, nullable=False)
