@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app import models  # noqa: F401 — register SQLAlchemy models on Base.metadata
 from app.api.v1.routers import (
-    auth, students, dues, payments_online, payments_manual,
+    auth, students, dues, payments_online, payments_manual, payments_parent,
     meetings, announcements, sms, reports, attendance, staff, parents, parents_admin, academic, class_levels
 )
 import logging
@@ -51,6 +51,7 @@ app.include_router(students.router, prefix="/api/v1")
 app.include_router(dues.router, prefix="/api/v1")
 app.include_router(payments_online.router, prefix="/api/v1")
 app.include_router(payments_manual.router, prefix="/api/v1")
+app.include_router(payments_parent.router, prefix="/api/v1")
 app.include_router(meetings.router, prefix="/api/v1")
 app.include_router(announcements.router, prefix="/api/v1")
 app.include_router(sms.router, prefix="/api/v1")

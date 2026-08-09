@@ -12,6 +12,7 @@ from app.models.student import Student
 from app.models.dues_config import DuesConfig
 from app.models.user import User
 from app.models.expenditure import Expenditure
+from app.models.class_level import Track
 from app.schemas.report import ExpenditureCreate
 from app.services.report_generator import generate_financial_report_excel
 from fastapi.responses import StreamingResponse
@@ -36,6 +37,7 @@ def _term_payment_filters(db, academic_year: str, term: str):
 async def financial_report(
     academic_year: str,
     term: str,
+    track: Optional[str] = Query(None, description="Optional track filter: BASIC or SHS"),
     db: Session = Depends(get_db),
     staff=Depends(require_permission("reports")),
 ):
@@ -47,20 +49,37 @@ async def financial_report(
     if not dues:
         raise HTTPException(status_code=404, detail="Dues configuration not found for this term")
 
+    track_enum: Optional[Track] = None
+    if track:
+        t = str(track).strip().upper()
+        if t not in {"BASIC", "SHS"}:
+            raise HTTPException(status_code=400, detail="track must be one of: BASIC, SHS")
+        track_enum = Track.BASIC if t == "BASIC" else Track.SHS
+
+    student_filters = [Student.academic_year == academic_year, Student.is_active == True]
+    if track_enum is not None:
+        student_filters.append(Student.track == track_enum)
+
     total_students = (
-        db.query(Student)
-        .filter(Student.academic_year == academic_year, Student.is_active == True)
-        .count()
+        db.query(Student).filter(*student_filters).count()
     )
 
-    online_paid = _term_payment_filters(db, academic_year, term).all()
+    online_query = _term_payment_filters(db, academic_year, term)
+    if track_enum is not None:
+        online_query = online_query.join(Student, Payment.student_id == Student.id).filter(
+            Student.track == track_enum
+        )
+    online_paid = online_query.all()
     online_collected = sum(p.amount_ghs for p in online_paid) if online_paid else Decimal(0)
 
-    manual_paid = (
-        db.query(ManualPayment)
-        .filter(ManualPayment.academic_year == academic_year, ManualPayment.term == term)
-        .all()
+    manual_query = db.query(ManualPayment).filter(
+        ManualPayment.academic_year == academic_year, ManualPayment.term == term
     )
+    if track_enum is not None:
+        manual_query = manual_query.join(Student, ManualPayment.student_id == Student.id).filter(
+            Student.track == track_enum
+        )
+    manual_paid = manual_query.all()
     manual_collected = sum(m.amount_ghs for m in manual_paid) if manual_paid else Decimal(0)
 
     total_collected = online_collected + manual_collected
@@ -71,7 +90,7 @@ async def financial_report(
 
     forms = (
         db.query(Student.form)
-        .filter(Student.academic_year == academic_year, Student.is_active == True)
+        .filter(*student_filters)
         .distinct()
         .all()
     )
@@ -80,22 +99,20 @@ async def financial_report(
         form_name = form_row[0]
         if not form_name:
             continue
+        form_student_filters = list(student_filters) + [Student.form == form_name]
         students_in_form = (
             db.query(Student)
-            .filter(
-                Student.academic_year == academic_year,
-                Student.form == form_name,
-                Student.is_active == True,
-            )
+            .filter(*form_student_filters)
             .count()
         )
-        online_in_form = (
-            _term_payment_filters(db, academic_year, term)
-            .join(Student, Payment.student_id == Student.id)
-            .filter(Student.form == form_name)
-            .count()
-        )
-        manual_in_form = (
+        online_in_form_query = _term_payment_filters(db, academic_year, term).join(
+            Student, Payment.student_id == Student.id
+        ).filter(Student.form == form_name)
+        if track_enum is not None:
+            online_in_form_query = online_in_form_query.filter(Student.track == track_enum)
+        online_in_form = online_in_form_query.count()
+
+        manual_in_form_query = (
             db.query(ManualPayment)
             .join(Student, ManualPayment.student_id == Student.id)
             .filter(
@@ -103,47 +120,62 @@ async def financial_report(
                 ManualPayment.term == term,
                 Student.form == form_name,
             )
-            .count()
         )
+        if track_enum is not None:
+            manual_in_form_query = manual_in_form_query.filter(Student.track == track_enum)
+        manual_in_form = manual_in_form_query.count()
+
         paid_in_form = len(
             {
                 p.student_id
-                for p in _term_payment_filters(db, academic_year, term)
-                .join(Student, Payment.student_id == Student.id)
-                .filter(Student.form == form_name)
-                .all()
+                for p in (
+                    _term_payment_filters(db, academic_year, term)
+                    .join(Student, Payment.student_id == Student.id)
+                    .filter(Student.form == form_name)
+                    .filter(*([Student.track == track_enum] if track_enum is not None else []))
+                    .all()
+                )
             }
             | {
                 m.student_id
-                for m in db.query(ManualPayment)
+                for m in (
+                    db.query(ManualPayment)
+                    .join(Student, ManualPayment.student_id == Student.id)
+                    .filter(
+                        ManualPayment.academic_year == academic_year,
+                        ManualPayment.term == term,
+                        Student.form == form_name,
+                    )
+                    .filter(*([Student.track == track_enum] if track_enum is not None else []))
+                    .all()
+                )
+            }
+        )
+        online_amounts = [
+            row[0]
+            for row in (
+                _term_payment_filters(db, academic_year, term)
+                .join(Student, Payment.student_id == Student.id)
+                .filter(Student.form == form_name)
+                .filter(*([Student.track == track_enum] if track_enum is not None else []))
+                .with_entities(Payment.amount_ghs)
+                .all()
+            )
+        ]
+        manual_amounts = [
+            row[0]
+            for row in (
+                db.query(ManualPayment)
                 .join(Student, ManualPayment.student_id == Student.id)
                 .filter(
                     ManualPayment.academic_year == academic_year,
                     ManualPayment.term == term,
                     Student.form == form_name,
                 )
+                .filter(*([Student.track == track_enum] if track_enum is not None else []))
+                .with_entities(ManualPayment.amount_ghs)
                 .all()
-            }
-        )
-        online_amounts = [
-            row[0]
-            for row in _term_payment_filters(db, academic_year, term)
-            .join(Student, Payment.student_id == Student.id)
-            .filter(Student.form == form_name)
-            .with_entities(Payment.amount_ghs)
-            .all()
-        ]
-        manual_amounts = [
-            row[0]
-            for row in db.query(ManualPayment)
-            .join(Student, ManualPayment.student_id == Student.id)
-            .filter(
-                ManualPayment.academic_year == academic_year,
-                ManualPayment.term == term,
-                Student.form == form_name,
             )
-            .with_entities(ManualPayment.amount_ghs)
-            .all()
         ]
         total_form_collected = sum(online_amounts + manual_amounts, Decimal(0))
         by_form.append(

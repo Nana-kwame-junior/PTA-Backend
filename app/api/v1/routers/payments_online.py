@@ -336,7 +336,22 @@ async def parent_payment_history(
     db: Session = Depends(get_db),
     parent=Depends(require_parent_match),
 ):
-    query = db.query(Payment).filter(Payment.parent_id == parent["id"])
+    """
+    Legacy online-only history.
+    Prefer GET /payments/parent/history for manual + online ward history.
+    Scoped to linked wards (not only payments initiated by this parent).
+    """
+    linked_ids = [str(sid) for sid in (parent.get("matched_student_ids") or [])]
+    if not linked_ids:
+        return {
+            "success": True,
+            "data": {
+                "payments": [],
+                "pagination": {"page": page, "limit": limit, "total": 0, "total_pages": 0},
+            },
+        }
+
+    query = db.query(Payment).filter(Payment.student_id.in_(linked_ids))
     total = query.count()
     payments = (
         query.order_by(Payment.created_at.desc())
@@ -371,8 +386,10 @@ async def download_online_receipt(
     payment = db.query(Payment).filter(Payment.id == str(payment_id)).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
-    if current_user["role"] == "PARENT" and payment.parent_id != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Not your payment")
+    if current_user["role"] == "PARENT":
+        linked = {str(sid) for sid in (current_user.get("matched_student_ids") or [])}
+        if str(payment.student_id) not in linked and payment.parent_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not your payment")
 
     student = db.query(Student).filter(Student.id == payment.student_id).first()
     receipt_data = {

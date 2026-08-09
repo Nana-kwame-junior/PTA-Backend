@@ -42,6 +42,9 @@ SAMPLE_CSV = (
     ",Kofi Mensah,M,JHS 1,,+233244567890,\n"
     "0111025007,Yaw Ofori,M,JHS 2,,+233551234567,\n"
     "0111025099,Efua Darko,F,JHS 3,,+233501234567,\n"
+    ",Ama Serwah,F,Form 1,General Arts,+233241111222,\n"
+    ",Kojo Boateng,M,Form 2,Science,+233242222333,\n"
+    "0001234567,Esi Kwansah,F,Form 3,Business,+233503333444,\n"
 )
 
 
@@ -126,6 +129,7 @@ async def list_students(
     stream: str = None,
     academic_year: str = None,
     is_active: bool = None,
+    track: str = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("students")),
 ):
@@ -143,6 +147,9 @@ async def list_students(
         query = query.filter(Student.academic_year == academic_year)
     if is_active is not None:
         query = query.filter(Student.is_active == is_active)
+    if track:
+        track_enum = Track.BASIC if str(track).strip().upper() == "BASIC" else Track.SHS
+        query = query.filter(Student.track == track_enum)
     total = query.count()
     students = query.offset((page - 1) * limit).limit(limit).all()
     return {
