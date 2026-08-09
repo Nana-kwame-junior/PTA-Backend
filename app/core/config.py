@@ -1,9 +1,26 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Optional
+from urllib.parse import unquote, urlparse
 from pydantic import model_validator
 
 from app.core.redis_url import ensure_rediss_ssl
+
+
+def _parse_cloudinary_url(url: str) -> tuple[str, str, str]:
+    """Parse cloudinary://api_key:api_secret@cloud_name → (name, key, secret)."""
+    raw = (url or "").strip()
+    if not raw:
+        return "", "", ""
+    parsed = urlparse(raw)
+    if parsed.scheme != "cloudinary":
+        raise ValueError("CLOUDINARY_URL must start with cloudinary://")
+    cloud_name = (parsed.hostname or "").strip()
+    api_key = unquote(parsed.username or "")
+    api_secret = unquote(parsed.password or "")
+    if not cloud_name or not api_key or not api_secret:
+        raise ValueError("CLOUDINARY_URL is missing cloud name, api key, or api secret")
+    return cloud_name, api_key, api_secret
 
 # Built-in defaults (used when NO env var or .env value is provided).
 # Kept as module-level constants so the "user explicitly provided a value" check below
@@ -76,7 +93,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:3000"
     cors_allow_credentials: bool = True
 
-    # ── File Storage ───────────────────────────────────────────────
+    # ── File Storage (Cloudinary) ──────────────────────────────────
+    # Prefer a single CLOUDINARY_URL=cloudinary://api_key:api_secret@cloud_name
+    # or set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET.
+    cloudinary_url: str = ""
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
@@ -136,6 +156,23 @@ class Settings(BaseSettings):
         self.redis_url = ensure_rediss_ssl(self.redis_url)
         self.celery_broker_url = ensure_rediss_ssl(self.celery_broker_url)
         self.celery_result_backend = ensure_rediss_ssl(self.celery_result_backend)
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_cloudinary(self):
+        """Fill discrete Cloudinary settings from CLOUDINARY_URL when provided."""
+        if not (self.cloudinary_url or "").strip():
+            return self
+        try:
+            cloud_name, api_key, api_secret = _parse_cloudinary_url(self.cloudinary_url)
+        except ValueError:
+            return self
+        if not self.cloudinary_cloud_name:
+            self.cloudinary_cloud_name = cloud_name
+        if not self.cloudinary_api_key:
+            self.cloudinary_api_key = api_key
+        if not self.cloudinary_api_secret:
+            self.cloudinary_api_secret = api_secret
         return self
 
     def resolved_brevo_sender(self) -> tuple[str, str]:

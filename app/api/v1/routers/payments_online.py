@@ -129,6 +129,7 @@ async def paystack_config():
 @router.post("/initiate")
 async def initiate_payment(
     req: InitiatePaymentRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     parent=Depends(require_parent_match),
 ):
@@ -153,7 +154,20 @@ async def initiate_payment(
     outstanding = student_outstanding_summary(db, student_id=str(req.student_id), track=track)
     total_due = Decimal(outstanding["total_due_ghs"])
     if total_due <= 0:
-        raise HTTPException(status_code=409, detail="All dues are paid for this student")
+        return {
+            "success": True,
+            "data": {
+                "paid_up": True,
+                "authorization_url": None,
+                "paystack_reference": None,
+                "payment_id": None,
+                "amount_ghs": "0.00",
+                "breakdown": outstanding["breakdown"],
+                "arrears_ghs": outstanding["arrears_ghs"],
+                "current_term_amount_ghs": outstanding["current_term_amount_ghs"],
+                "public_key": settings.paystack_public_key,
+            },
+        }
 
     pending = (
         db.query(Payment)
@@ -165,24 +179,38 @@ async def initiate_payment(
         .first()
     )
     if pending:
-        raise HTTPException(status_code=409, detail="A payment is already pending for this student")
-
-    payment_ref = f"mwl-{uuid.uuid4().hex[:8]}"
-    payment = Payment(
-        student_id=str(req.student_id),
-        dues_config_id=str(req.dues_config_id),
-        parent_id=parent["id"],
-        amount_ghs=total_due,
-        paystack_reference=payment_ref,
-        status=PaymentStatus.PENDING,
-    )
-    db.add(payment)
-    db.commit()
-    db.refresh(payment)
+        verify = await verify_transaction(pending.paystack_reference)
+        verify_status = verify.get("data", {}).get("status") if verify.get("status") else None
+        if verify_status == "success":
+            await _mark_payment_completed(pending, db, background_tasks)
+            db.commit()
+            raise HTTPException(status_code=409, detail="All dues are paid for this student")
+        elif verify_status == "failed":
+            pending.status = PaymentStatus.FAILED
+            db.commit()
+            pending = None
 
     amount_in_pesewas = int(float(total_due) * 100)
     parent_row = db.query(Parent).filter(Parent.id == parent["id"]).first()
     paystack_email = _paystack_email(parent_row.phone if parent_row else parent.get("phone", ""))
+
+    if pending:
+        payment = pending
+        payment_ref = pending.paystack_reference
+    else:
+        payment_ref = f"mwl-{uuid.uuid4().hex[:8]}"
+        payment = Payment(
+            student_id=str(req.student_id),
+            dues_config_id=str(req.dues_config_id),
+            parent_id=parent["id"],
+            amount_ghs=total_due,
+            paystack_reference=payment_ref,
+            status=PaymentStatus.PENDING,
+        )
+        db.add(payment)
+        db.commit()
+        db.refresh(payment)
+
     result = await initialize_transaction(
         email=paystack_email,
         amount=amount_in_pesewas,
@@ -191,14 +219,16 @@ async def initiate_payment(
     )
 
     if not result.get("status"):
-        payment.status = PaymentStatus.FAILED
-        db.commit()
+        if not pending:
+            payment.status = PaymentStatus.FAILED
+            db.commit()
         message = result.get("message", "Paystack initialization failed")
         raise HTTPException(status_code=400, detail=message)
 
     return {
         "success": True,
         "data": {
+            "paid_up": False,
             "payment_id": str(payment.id),
             "paystack_reference": payment_ref,
             "authorization_url": result["data"]["authorization_url"],

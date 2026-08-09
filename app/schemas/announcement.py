@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
+
 
 class AnnouncementType(str, Enum):
     GENERAL = "GENERAL"
@@ -8,8 +9,18 @@ class AnnouncementType(str, Enum):
     FINANCIAL = "FINANCIAL"
     EVENT = "EVENT"
 
+
 class AnnouncementCreate(BaseModel):
     title: str
     body: str
     type: AnnouncementType
     send_sms: bool = False
+
+
+class AnnouncementOut(BaseModel):
+    id: str
+    title: str
+    body: str = ""
+    type: AnnouncementType
+    published_at: Optional[str] = None
+    image_urls: list[str] = Field(default_factory=list)
