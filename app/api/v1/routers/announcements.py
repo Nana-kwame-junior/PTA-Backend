@@ -1,17 +1,18 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, UploadFile
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import require_role, get_current_user
+from app.core.security import require_permission, get_current_user
 from app.models.announcement import Announcement, AnnouncementType
 from app.models.parent import Parent
 from app.models.sms_log import SmsLog
 from app.schemas.announcement import AnnouncementCreate
 from app.services.sms import send_sms_background
 from app.services.activity_log import log_staff_activity
-from app.services.cloudinary_upload import upload_announcement_images
+from app.services.cloudinary_upload import MAX_IMAGES, upload_announcement_images
 
 router = APIRouter(prefix="/announcements", tags=["Announcements"])
 
@@ -36,6 +37,59 @@ def _parse_bool(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _collect_upload_files(form) -> list[UploadFile]:
+    files: list[UploadFile] = []
+    for key in ("images", "images[]", "image"):
+        for item in form.getlist(key):
+            if isinstance(item, UploadFile) and item.filename:
+                files.append(item)
+    seen: set[int] = set()
+    unique: list[UploadFile] = []
+    for f in files:
+        oid = id(f)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        unique.append(f)
+    return unique
+
+
+def _parse_keep_urls(raw) -> Optional[list[str]]:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return [str(u).strip() for u in raw if str(u).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="keep_image_urls must be a JSON array") from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail="keep_image_urls must be a JSON array")
+    return [str(u).strip() for u in parsed if str(u).strip()]
+
+
+def _merge_image_urls(
+    existing: list[str],
+    *,
+    keep_urls: Optional[list[str]],
+    new_urls: list[str],
+) -> list[str]:
+    if keep_urls is None and not new_urls:
+        return existing
+    existing_set = set(existing)
+    kept = [u for u in (keep_urls if keep_urls is not None else existing) if u in existing_set]
+    merged = kept + new_urls
+    if len(merged) > MAX_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"An announcement can have at most {MAX_IMAGES} images.",
+        )
+    return merged
+
+
 async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, list[UploadFile]]:
     content_type = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in content_type:
@@ -50,23 +104,9 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
             raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
         if not title or not body:
             raise HTTPException(status_code=400, detail="Title and body are required")
-        files: list[UploadFile] = []
-        for key in ("images", "images[]", "image"):
-            for item in form.getlist(key):
-                if isinstance(item, UploadFile) and item.filename:
-                    files.append(item)
-        # de-dupe by object identity while preserving order
-        seen: set[int] = set()
-        unique_files: list[UploadFile] = []
-        for f in files:
-            oid = id(f)
-            if oid in seen:
-                continue
-            seen.add(oid)
-            unique_files.append(f)
         return (
             AnnouncementCreate(title=title, body=body, type=ann_type, send_sms=send_sms),
-            unique_files,
+            _collect_upload_files(form),
         )
 
     try:
@@ -80,12 +120,66 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
     return req, []
 
 
+async def _parse_update_payload(
+    request: Request,
+) -> tuple[dict, list[UploadFile], Optional[list[str]]]:
+    """Return field updates, new image files, and optional keep_image_urls list."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    fields: dict = {}
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        if "title" in form:
+            title = str(form.get("title") or "").strip()
+            if not title:
+                raise HTTPException(status_code=400, detail="Title cannot be empty")
+            fields["title"] = title
+        if "body" in form:
+            body = str(form.get("body") or "").strip()
+            if not body:
+                raise HTTPException(status_code=400, detail="Body cannot be empty")
+            fields["body"] = body
+        if "type" in form and form.get("type") is not None and str(form.get("type")).strip() != "":
+            type_raw = str(form.get("type")).strip().upper()
+            try:
+                fields["type"] = AnnouncementType(type_raw)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
+        keep_urls = _parse_keep_urls(form.get("keep_image_urls")) if "keep_image_urls" in form else None
+        return fields, _collect_upload_files(form), keep_urls
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid update payload")
+    if "title" in payload:
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        fields["title"] = title
+    if "body" in payload:
+        body = str(payload.get("body") or "").strip()
+        if not body:
+            raise HTTPException(status_code=400, detail="Body cannot be empty")
+        fields["body"] = body
+    if "type" in payload and payload.get("type") is not None:
+        try:
+            fields["type"] = AnnouncementType(str(payload["type"]).strip().upper())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
+    keep_urls = _parse_keep_urls(payload.get("keep_image_urls")) if "keep_image_urls" in payload else None
+    if keep_urls is None and "image_urls" in payload:
+        keep_urls = _parse_keep_urls(payload.get("image_urls"))
+    return fields, [], keep_urls
+
+
 @router.post("")
 async def create_announcement(
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("announcements")),
 ):
     req, files = await _parse_create_payload(request)
     image_urls = await upload_announcement_images(files) if files else []
@@ -121,7 +215,7 @@ async def create_announcement(
 
     log_staff_activity(
         db,
-        admin,
+        staff,
         page_label="Announcements",
         action_label=f"Published announcement: {announcement.title}",
         details=announcement.type.value,
@@ -170,42 +264,60 @@ async def list_announcements(
 @router.patch("/{announcement_id}")
 async def update_announcement(
     announcement_id: UUID,
-    req: dict,  # title, body
+    request: Request,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("announcements")),
 ):
     announcement = db.query(Announcement).filter(Announcement.id == str(announcement_id)).first()
     if not announcement:
-        raise HTTPException(status_code=404)
-    if "title" in req:
-        announcement.title = req["title"]
-    if "body" in req:
-        announcement.body = req["body"]
+        raise HTTPException(status_code=404, detail="Announcement not found")
+
+    fields, files, keep_urls = await _parse_update_payload(request)
+    if not fields and not files and keep_urls is None:
+        raise HTTPException(status_code=400, detail="No changes provided")
+
+    if "title" in fields:
+        announcement.title = fields["title"]
+    if "body" in fields:
+        announcement.body = fields["body"]
+    if "type" in fields:
+        announcement.type = fields["type"]
+
+    existing = [str(u) for u in (announcement.image_urls or []) if u]
+    new_urls = await upload_announcement_images(files) if files else []
+    if keep_urls is not None or new_urls:
+        announcement.image_urls = _merge_image_urls(
+            existing,
+            keep_urls=keep_urls,
+            new_urls=new_urls,
+        )
+
     db.commit()
+    db.refresh(announcement)
     log_staff_activity(
         db,
-        admin,
+        staff,
         page_label="Announcements",
         action_label=f"Updated announcement: {announcement.title}",
     )
-    return {"success": True, "data": {"id": str(announcement_id), "updated": True}}
+    return {"success": True, "data": _serialize_announcement(announcement)}
 
 
 @router.delete("/{announcement_id}")
 async def deactivate_announcement(
     announcement_id: UUID,
     db: Session = Depends(get_db),
-    admin=Depends(require_role("ADMIN")),
+    staff=Depends(require_permission("announcements")),
 ):
     announcement = db.query(Announcement).filter(Announcement.id == str(announcement_id)).first()
     if not announcement:
-        raise HTTPException(status_code=404)
+        raise HTTPException(status_code=404, detail="Announcement not found")
     title = announcement.title
     announcement.is_active = False
     db.commit()
     log_staff_activity(
         db,
-        admin,
+        staff,
         page_label="Announcements",
         action_label=f"Removed announcement: {title}",
         details="Soft deleted",

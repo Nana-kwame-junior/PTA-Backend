@@ -12,6 +12,7 @@ ALL_STAFF_PERMISSIONS = [
     "payments.dues",
     "reports",
     "meetings",
+    "announcements",
     "academic",
     "settings",
 ]
