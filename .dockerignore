@@ -1,0 +1,57 @@
+# Python / bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual envs (huge — do NOT ship these into the builder context)
+.venv/
+venv/
+env/
+ENV/
+pyvenv.cfg
+
+# Local env + secrets (also listed in .gitignore — critical to keep out of snapshots)
+.env
+.env.local
+.env.*.local
+.secrets
+*.pem
+*.key
+
+# IDE / editor junk
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# DB files and scratch data
+*.sqlite3
+*.db
+*.sqlite
+
+# Test + coverage junk
+.coverage
+.coverage.*
+.cache
+htmlcov/
+.pytest_cache/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+logs/
+
+# Tasks / local scratch
+tasks/
+*.local.py
+
+# Git metadata (rarely needed in build context)
+# .git  — typically already excluded by the builder; uncomment if railway keeps it.
+# .git/
