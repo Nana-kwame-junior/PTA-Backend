@@ -54,12 +54,21 @@ async def verify_transaction(reference: str):
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:
+    """Paystack signs webhooks with the secret key (HMAC SHA512)."""
     import hmac
     import hashlib
 
-    expected = hmac.new(
-        settings.paystack_webhook_secret.encode("utf-8"),
-        payload,
-        hashlib.sha512,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    candidates: list[str] = []
+    secret_key = (settings.paystack_secret_key or "").strip()
+    webhook_secret = (settings.paystack_webhook_secret or "").strip()
+    if secret_key:
+        candidates.append(secret_key)
+    # Keep webhook secret as a fallback for custom/proxy setups.
+    if webhook_secret and webhook_secret not in candidates and "your-webhook" not in webhook_secret:
+        candidates.append(webhook_secret)
+
+    for secret in candidates:
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha512).hexdigest()
+        if hmac.compare_digest(expected, signature):
+            return True
+    return False

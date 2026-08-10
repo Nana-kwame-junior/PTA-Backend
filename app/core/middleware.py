@@ -54,13 +54,28 @@ def _client_key(request: Request) -> str:
     return "unknown"
 
 
+WEBHOOK_PATH_SUFFIXES = (
+    "/payments/webhook/paystack",
+    "/payments/online/webhook",
+    "/payments/online/webhook/paystack",
+)
+
+
+def _is_webhook_path(path: str) -> bool:
+    return any(path.endswith(suffix) for suffix in WEBHOOK_PATH_SUFFIXES)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        key_base = _client_key(request)
         path = request.url.path
+        # Never rate-limit payment provider webhooks.
+        if _is_webhook_path(path):
+            return await call_next(request)
+
+        key_base = _client_key(request)
 
         if not _rate_limiter.allow(f"global:{key_base}", *GLOBAL_LIMIT):
             return JSONResponse(

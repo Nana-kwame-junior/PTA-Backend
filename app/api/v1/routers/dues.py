@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
 from datetime import datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from app.core.database import get_db, SessionLocal
@@ -176,6 +177,14 @@ async def get_parent_outstanding(
         summary["student_name"] = student.full_name
         summary["student_index_number"] = student.index_number
         wards.append(summary)
+    # Pending balances first so parents land on a child who still owes.
+    wards.sort(
+        key=lambda w: (
+            0 if Decimal(str(w.get("total_due_ghs") or 0)) > 0 else 1,
+            -Decimal(str(w.get("total_due_ghs") or 0)),
+            str(w.get("student_name") or ""),
+        )
+    )
     return {"success": True, "data": {"wards": wards}}
 
 
@@ -201,7 +210,7 @@ async def update_dues_config(
         page_label="Dues Configuration",
         action_label=f"Updated dues for {dues.term} {dues.academic_year}",
     )
-    return {"success": True, "data": {"id": str(config_id), "updated": True}}
+    return {"success": True, "data": _serialize_dues(dues)}
 
 
 @router.delete("/{config_id}")

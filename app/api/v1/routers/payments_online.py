@@ -169,47 +169,43 @@ async def initiate_payment(
             },
         }
 
-    pending = (
+    # Retire any abandoned PENDING checkout. Re-using the same Paystack reference
+    # fails with "Duplicate Transaction Reference" and leaves the app hanging.
+    pending_rows = (
         db.query(Payment)
         .filter(
             Payment.student_id == str(req.student_id),
             Payment.dues_config_id == str(req.dues_config_id),
             Payment.status == PaymentStatus.PENDING,
         )
-        .first()
+        .all()
     )
-    if pending:
+    for pending in pending_rows:
         verify = await verify_transaction(pending.paystack_reference)
         verify_status = verify.get("data", {}).get("status") if verify.get("status") else None
         if verify_status == "success":
             await _mark_payment_completed(pending, db, background_tasks)
             db.commit()
             raise HTTPException(status_code=409, detail="All dues are paid for this student")
-        elif verify_status == "failed":
-            pending.status = PaymentStatus.FAILED
-            db.commit()
-            pending = None
+        pending.status = PaymentStatus.FAILED
+        db.commit()
 
     amount_in_pesewas = int(float(total_due) * 100)
     parent_row = db.query(Parent).filter(Parent.id == parent["id"]).first()
     paystack_email = _paystack_email(parent_row.phone if parent_row else parent.get("phone", ""))
 
-    if pending:
-        payment = pending
-        payment_ref = pending.paystack_reference
-    else:
-        payment_ref = f"mwl-{uuid.uuid4().hex[:8]}"
-        payment = Payment(
-            student_id=str(req.student_id),
-            dues_config_id=str(req.dues_config_id),
-            parent_id=parent["id"],
-            amount_ghs=total_due,
-            paystack_reference=payment_ref,
-            status=PaymentStatus.PENDING,
-        )
-        db.add(payment)
-        db.commit()
-        db.refresh(payment)
+    payment_ref = f"mwl-{uuid.uuid4().hex[:8]}"
+    payment = Payment(
+        student_id=str(req.student_id),
+        dues_config_id=str(req.dues_config_id),
+        parent_id=parent["id"],
+        amount_ghs=total_due,
+        paystack_reference=payment_ref,
+        status=PaymentStatus.PENDING,
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
 
     result = await initialize_transaction(
         email=paystack_email,
@@ -219,9 +215,8 @@ async def initiate_payment(
     )
 
     if not result.get("status"):
-        if not pending:
-            payment.status = PaymentStatus.FAILED
-            db.commit()
+        payment.status = PaymentStatus.FAILED
+        db.commit()
         message = result.get("message", "Paystack initialization failed")
         raise HTTPException(status_code=400, detail=message)
 
@@ -271,8 +266,12 @@ async def verify_payment_reference(
     return {"success": True, "data": _serialize_payment(payment, student)}
 
 
-@router.post("/webhook")
-async def paystack_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def process_paystack_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session,
+) -> dict:
+    """Shared Paystack webhook handler (signature + charge.success / charge.failed)."""
     signature = request.headers.get("x-paystack-signature")
     if not signature:
         raise HTTPException(status_code=400, detail="Missing signature")
@@ -281,36 +280,77 @@ async def paystack_webhook(request: Request, background_tasks: BackgroundTasks, 
     if not verify_webhook_signature(body, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    payload = json.loads(body.decode("utf-8"))
-    event = payload.get("event")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
-    if event == "charge.success":
-        reference = payload["data"]["reference"]
+    event = payload.get("event")
+    data = payload.get("data") or {}
+    reference = data.get("reference")
+
+    if event == "charge.success" and reference:
         payment = db.query(Payment).filter(Payment.paystack_reference == reference).first()
         if payment:
             await _mark_payment_completed(payment, db, background_tasks)
 
-    elif event == "charge.failed":
-        reference = payload["data"]["reference"]
+    elif event == "charge.failed" and reference:
         payment = db.query(Payment).filter(Payment.paystack_reference == reference).first()
-        if payment:
+        if payment and payment.status != PaymentStatus.COMPLETED:
             payment.status = PaymentStatus.FAILED
             db.commit()
 
     return {"status": "ok"}
 
 
+@router.post("/webhook")
+async def paystack_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Canonical webhook: POST /api/v1/payments/online/webhook"""
+    return await process_paystack_webhook(request, background_tasks, db)
+
+
+@router.post("/webhook/paystack")
+async def paystack_webhook_alias(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Alias: POST /api/v1/payments/online/webhook/paystack"""
+    return await process_paystack_webhook(request, background_tasks, db)
+
+
 @router.get("/callback")
 async def paystack_callback(reference: str = None, trxref: str = None):
-    ref = reference or trxref or ""
+    ref = (reference or trxref or "").replace('"', "")
+    deep_link = f"mawuli-pta://payment-callback?reference={ref}"
     html = f"""
     <!DOCTYPE html>
-    <html><head><meta charset="utf-8"><title>Payment Complete</title></head>
-    <body style="font-family:sans-serif;text-align:center;padding:48px;">
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Payment Complete</title>
+      <script>
+        (function () {{
+          var target = {deep_link!r};
+          try {{ window.location.replace(target); }} catch (e) {{}}
+          setTimeout(function () {{
+            try {{ window.location.href = target; }} catch (e) {{}}
+          }}, 300);
+        }})();
+      </script>
+    </head>
+    <body style="font-family:sans-serif;text-align:center;padding:48px;background:#0A1628;color:#fff;">
       <h1>Payment received</h1>
       <p>Reference: {ref}</p>
-      <p>You can close this page and return to the SchoolPulse PTA app.</p>
-    </body></html>
+      <p>Returning you to the SchoolPulse app…</p>
+      <p style="margin-top:24px;"><a href="{deep_link}" style="color:#F5C518;">Tap here if the app does not open</a></p>
+    </body>
+    </html>
     """
     return HTMLResponse(content=html)
 
