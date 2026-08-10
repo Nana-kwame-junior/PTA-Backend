@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.database import get_db, SessionLocal
 from app.core.security import require_permission
-from app.models.meeting import Meeting, MeetingStatus
+from app.models.meeting import Meeting, MeetingAudience, MeetingStatus
 from app.models.announcement import AnnouncementType
 from app.models.job_record import JobRecord
 from app.schemas.meeting import MeetingCreate, MeetingUpdate, MeetingCancel
@@ -16,6 +16,7 @@ from app.services.meeting_sms import (
     meeting_sms_on_cancel_sync,
     meeting_sms_on_create_sync,
     meeting_sms_on_update_sync,
+    parse_meeting_end,
     parse_meeting_start,
     reminder_plan_summary,
 )
@@ -32,8 +33,13 @@ def _meeting_lifecycle(meeting: Meeting) -> str:
     if status == MeetingStatus.COMPLETED:
         return "ended"
     try:
+        now = datetime.now(ACCRA)
+        end = parse_meeting_end(meeting)
+        if end is not None and end <= now:
+            return "ended"
         start = parse_meeting_start(meeting)
-        if start <= datetime.now(ACCRA):
+        # Still upcoming until end (if set); otherwise until start passes.
+        if end is None and start <= now:
             return "ended"
     except Exception:
         pass
@@ -42,19 +48,24 @@ def _meeting_lifecycle(meeting: Meeting) -> str:
 
 def _serialize_meeting(meeting: Meeting) -> dict:
     lifecycle = _meeting_lifecycle(meeting)
+    audience = meeting.audience_track or MeetingAudience.BOTH
     return {
         "id": str(meeting.id),
         "title": meeting.title,
         "date": meeting.date.isoformat(),
         "time": meeting.time,
+        "end_date": meeting.end_date.isoformat() if meeting.end_date else None,
+        "end_time": meeting.end_time,
         "venue": meeting.venue,
         "agenda": meeting.agenda,
         "term": meeting.term,
         "academic_year": meeting.academic_year,
+        "audience_track": audience.value if hasattr(audience, "value") else str(audience),
         "category": meeting.category.value if meeting.category else "GENERAL",
         "status": meeting.status.value,
         "lifecycle": lifecycle,
         "is_ended": lifecycle != "upcoming",
+        "sms_plan": reminder_plan_summary(meeting) if lifecycle == "upcoming" else None,
     }
 
 
@@ -131,6 +142,7 @@ async def create_meeting(
     data = req.dict()
     data["category"] = AnnouncementType(data.get("category", "GENERAL"))
     data["status"] = MeetingStatus(data.get("status", "SCHEDULED"))
+    data["audience_track"] = MeetingAudience(data.get("audience_track", "BOTH"))
     meeting = Meeting(**data)
     db.add(meeting)
     db.commit()
@@ -182,12 +194,18 @@ async def update_meeting(
     for key, value in updates.items():
         if key == "category" and value is not None:
             value = AnnouncementType(value)
+        if key == "audience_track" and value is not None:
+            value = MeetingAudience(value)
         setattr(meeting, key, value)
     db.commit()
     db.refresh(meeting)
 
-    meaningful = any(k in updates for k in ("date", "time", "venue", "title", "agenda"))
-    schedule_fields_changed = any(k in updates for k in ("date", "time"))
+    meaningful = any(
+        k in updates for k in ("date", "time", "end_date", "end_time", "venue", "title", "agenda")
+    )
+    schedule_fields_changed = any(
+        k in updates for k in ("date", "time", "end_date", "end_time", "audience_track")
+    )
 
     if meeting.status == MeetingStatus.CANCELLED:
         background_tasks.add_task(
@@ -265,7 +283,12 @@ async def send_agenda_sms(
     if not meeting:
         raise HTTPException(status_code=404)
 
-    phones = meeting_recipient_phones(db)
+    audience = (
+        meeting.audience_track.value
+        if hasattr(meeting.audience_track, "value")
+        else str(meeting.audience_track or "BOTH")
+    )
+    phones = meeting_recipient_phones(db, audience)
     message = (
         f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: "
         f"{(meeting.agenda or '')[:120]}… Full agenda on the Mawuli PTA app. — Mawuli SHS PTA"

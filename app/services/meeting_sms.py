@@ -1,11 +1,14 @@
 """Meeting SMS: create notice, timed reminders, update/cancel notices.
 
-Reminder timeline (Africa/Accra local time):
-  D7       — 7 days before at 09:00
-  D4       — 4 days before at 09:00
-  D2       — 2 days before at 09:00
-  D0       — morning of meeting at 07:00
+Reminder timeline (Africa/Accra local time), relative to meeting START:
+  D7       — 7 days before start, at 09:00
+  D4       — 4 days before start, at 09:00
+  D2       — 2 days before start, at 09:00
+  D0       — morning of start day, at 07:00
   AT_TIME  — exactly when the meeting starts
+
+Reminders are only scheduled if their send time is still before the meeting END
+(when end_date/end_time is set). After the meeting ends, no further SMS is sent.
 
 Celery ETA is preferred. If the broker is unavailable, reminders fall back
 to mNotify scheduled SMS so parents still get notified.
@@ -34,6 +37,15 @@ logger = logging.getLogger(__name__)
 
 ACCRA = ZoneInfo("Africa/Accra")
 
+
+def _phones_for_meeting(db: Session, meeting: Meeting) -> list[str]:
+    audience = (
+        meeting.audience_track.value
+        if hasattr(meeting.audience_track, "value")
+        else str(getattr(meeting, "audience_track", None) or "BOTH")
+    )
+    return meeting_recipient_phones(db, audience)
+
 # (reminder_type, days_before, hour, minute) — AT_TIME uses meeting clock time
 DAY_REMINDERS = [
     ("D7", 7, 9, 0),
@@ -43,29 +55,39 @@ DAY_REMINDERS = [
 ]
 
 
-def parse_meeting_start(meeting: Meeting) -> datetime:
-    """Combine meeting.date + meeting.time into an Accra-aware datetime."""
-    d = meeting.date
-    hour, minute = 10, 0
-    raw = (meeting.time or "").strip()
+def _combine_date_time(d: datetime, time_raw: str | None, *, default_hour: int, default_minute: int = 0) -> datetime:
+    hour, minute = default_hour, default_minute
+    raw = (time_raw or "").strip()
     if raw:
         parts = raw.replace(".", ":").split(":")
         try:
             hour = int(parts[0])
             minute = int(parts[1]) if len(parts) > 1 else 0
         except (TypeError, ValueError):
-            hour, minute = 10, 0
+            hour, minute = default_hour, default_minute
     naive = datetime(d.year, d.month, d.day, hour, minute, 0)
     if d.tzinfo is not None:
-        # Normalize to Accra calendar day then apply meeting clock
         local = d.astimezone(ACCRA)
         naive = datetime(local.year, local.month, local.day, hour, minute, 0)
     return naive.replace(tzinfo=ACCRA)
 
 
+def parse_meeting_start(meeting: Meeting) -> datetime:
+    """Combine meeting.date + meeting.time into an Accra-aware datetime."""
+    return _combine_date_time(meeting.date, meeting.time, default_hour=10)
+
+
+def parse_meeting_end(meeting: Meeting) -> datetime | None:
+    """Combine end_date + end_time; defaults end_time to 12:00 if only end_date is set."""
+    if not meeting.end_date:
+        return None
+    return _combine_date_time(meeting.end_date, meeting.end_time, default_hour=12)
+
+
 def compute_reminder_etas(meeting: Meeting) -> list[tuple[str, datetime]]:
-    """Return (type, eta) pairs that are still in the future."""
+    """Return (type, eta) pairs still in the future and before meeting end."""
     start = parse_meeting_start(meeting)
+    end = parse_meeting_end(meeting)
     meeting_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
     now = datetime.now(ACCRA)
     etas: list[tuple[str, datetime]] = []
@@ -74,19 +96,37 @@ def compute_reminder_etas(meeting: Meeting) -> list[tuple[str, datetime]]:
         eta = (meeting_day - timedelta(days=days_before)).replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
-        if eta > now:
+        if eta > now and (end is None or eta < end):
             etas.append((reminder_type, eta))
 
-    if start > now:
-        etas.append(("AT_TIME", start))
+    if start > now and (end is None or start < end or start <= end):
+        # AT_TIME at start is allowed when start == end is unlikely; always allow at start if before/at end.
+        if end is None or start <= end:
+            etas.append(("AT_TIME", start))
 
     return etas
 
 
 def reminder_plan_summary(meeting: Meeting) -> dict:
-    return {
+    start = parse_meeting_start(meeting)
+    end = parse_meeting_end(meeting)
+    plan = {
         reminder_type.lower(): {"scheduled_for": eta.isoformat()}
         for reminder_type, eta in compute_reminder_etas(meeting)
+    }
+    return {
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat() if end else None,
+        "audience_track": (
+            meeting.audience_track.value
+            if hasattr(meeting.audience_track, "value")
+            else str(meeting.audience_track or "BOTH")
+        ),
+        "reminders": plan,
+        "timeline": [
+            {"type": reminder_type, "scheduled_for": eta.isoformat()}
+            for reminder_type, eta in compute_reminder_etas(meeting)
+        ],
     }
 
 
@@ -217,7 +257,7 @@ async def schedule_meeting_reminders(db: Session, meeting: Meeting) -> dict:
     if not meeting.is_active:
         return {}
 
-    phones = meeting_recipient_phones(db)
+    phones = _phones_for_meeting(db, meeting)
     if not phones:
         logger.warning("No SMS recipients for meeting reminders %s", meeting.id)
         return {}
@@ -284,7 +324,7 @@ async def send_meeting_created_notice(db: Session, meeting: Meeting) -> int:
         return 0
     if meeting.status != MeetingStatus.SCHEDULED:
         return 0
-    phones = meeting_recipient_phones(db)
+    phones = _phones_for_meeting(db, meeting)
     if not phones:
         logger.warning("No SMS recipients for new meeting %s", meeting.id)
         return 0
@@ -302,7 +342,7 @@ async def send_meeting_updated_notice(
     if not settings.mnotify_api_key:
         logger.info("mNotify not configured — meeting update SMS skipped")
         return 0
-    phones = meeting_recipient_phones(db)
+    phones = _phones_for_meeting(db, meeting)
     if not phones:
         return 0
     message = _updated_message(meeting, old_date=old_date, old_time=old_time, old_venue=old_venue)
@@ -312,7 +352,7 @@ async def send_meeting_updated_notice(
 async def send_meeting_cancelled_notice(db: Session, meeting: Meeting, reason: str) -> int:
     if not settings.mnotify_api_key:
         return 0
-    phones = meeting_recipient_phones(db)
+    phones = _phones_for_meeting(db, meeting)
     if not phones:
         return 0
     return await _send_bulk_logged(db, phones, _cancelled_message(meeting, reason), "MEETING_CANCELLED")

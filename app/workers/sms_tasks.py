@@ -44,7 +44,12 @@ def send_meeting_reminder(self, meeting_id: str, reminder_type: str):
             return {"skipped": True, "reason": "cancelled"}
 
         message = _reminder_message(meeting, reminder_type)
-        phones = meeting_recipient_phones(db)
+        audience = (
+            meeting.audience_track.value
+            if hasattr(meeting.audience_track, "value")
+            else str(getattr(meeting, "audience_track", None) or "BOTH")
+        )
+        phones = meeting_recipient_phones(db, audience)
         sent = 0
         for phone in phones:
             try:

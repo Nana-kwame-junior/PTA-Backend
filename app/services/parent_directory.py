@@ -73,14 +73,50 @@ def serialize_registered_parent(db: Session, parent: Parent) -> dict:
     }
 
 
-def meeting_recipient_phones(db: Session) -> list[str]:
-    """Matched app parents plus phone numbers stored on student records."""
+def meeting_recipient_phones(db: Session, audience_track: str | None = "BOTH") -> list[str]:
+    """
+    Matched app parents plus phone numbers stored on student records.
+    audience_track: BOTH | BASIC | SHS — filters student-linked phones by track.
+    """
+    from app.models.class_level import Track
+
+    track_filter = (audience_track or "BOTH").strip().upper()
     phones: set[str] = set()
-    for parent in db.query(Parent).filter(Parent.match_status == MatchStatus.MATCHED).all():
-        normalized = _phone_for_sms(parent.phone, context="meeting SMS parent")
-        if normalized:
-            phones.add(normalized)
-    for student in db.query(Student).filter(Student.is_active == True).all():
+
+    student_query = db.query(Student).filter(Student.is_active == True)
+    if track_filter == "BASIC":
+        student_query = student_query.filter(Student.track == Track.BASIC)
+    elif track_filter == "SHS":
+        student_query = student_query.filter(Student.track == Track.SHS)
+    students = student_query.all()
+    student_ids = {str(s.id) for s in students}
+
+    if track_filter == "BOTH":
+        for parent in db.query(Parent).filter(Parent.match_status == MatchStatus.MATCHED).all():
+            normalized = _phone_for_sms(parent.phone, context="meeting SMS parent")
+            if normalized:
+                phones.add(normalized)
+    else:
+        # Parents who have at least one linked ward on the selected track
+        parent_ids: set[str] = set()
+        if student_ids:
+            links = (
+                db.query(ParentStudentLink)
+                .filter(ParentStudentLink.student_id.in_(student_ids))
+                .all()
+            )
+            parent_ids = {str(link.parent_id) for link in links}
+        if parent_ids:
+            for parent in (
+                db.query(Parent)
+                .filter(Parent.id.in_(parent_ids), Parent.match_status == MatchStatus.MATCHED)
+                .all()
+            ):
+                normalized = _phone_for_sms(parent.phone, context="meeting SMS parent")
+                if normalized:
+                    phones.add(normalized)
+
+    for student in students:
         for raw in (student.parent_phone_1, student.parent_phone_2):
             normalized = _phone_for_sms(raw, context=f"meeting SMS student {student.id}")
             if normalized:
