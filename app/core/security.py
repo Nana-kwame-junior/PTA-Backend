@@ -113,3 +113,17 @@ async def require_registration_token(
     if payload.get("role") != "REGISTERING":
         raise HTTPException(status_code=403, detail="Invalid registration token")
     return payload
+
+
+async def require_registration_or_parent(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """Allow student name search during registration or by an authenticated parent."""
+    payload = decode_token(credentials.credentials)
+    role = payload.get("role")
+    if role == "REGISTERING":
+        return payload
+    if role == "PARENT":
+        return await get_current_user(credentials, db)
+    raise HTTPException(status_code=403, detail="Invalid token for student search")

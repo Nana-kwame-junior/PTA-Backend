@@ -9,6 +9,7 @@ from app.core.security import (
     hash_password,
     get_current_user,
     require_registration_token,
+    require_registration_or_parent,
 )
 from app.services.sms import send_verification_code_sms
 from app.services.sms_errors import SmsDeliveryError
@@ -88,10 +89,10 @@ async def parent_registration_class_levels(db: Session = Depends(get_db)):
 async def search_students_for_registration(
     name: str,
     form: str | None = None,
-    payload=Depends(require_registration_token),
+    payload=Depends(require_registration_or_parent),
     db: Session = Depends(get_db),
 ):
-    """Search active students by name while completing registration."""
+    """Search active students by name during registration or while linking a ward."""
     query_text = (name or "").strip()
     if len(query_text) < 2:
         return {"success": True, "data": {"students": []}}
