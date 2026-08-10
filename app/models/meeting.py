@@ -29,7 +29,7 @@ class Meeting(Base):
     end_time = Column(String(10), nullable=True)
     venue = Column(String(255))
     agenda = Column(Text)
-    term = Column(String(20))
+    term = Column(String(80))
     academic_year = Column(String(20))
     audience_track = Column(
         SQLEnum(MeetingAudience),
