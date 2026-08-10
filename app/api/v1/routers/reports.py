@@ -43,11 +43,16 @@ async def financial_report(
 ):
     dues = (
         db.query(DuesConfig)
-        .filter(DuesConfig.academic_year == academic_year, DuesConfig.term == term)
+        .filter(
+            DuesConfig.academic_year == academic_year,
+            DuesConfig.term == term,
+            DuesConfig.is_active == True,
+        )
         .first()
     )
-    if not dues:
-        raise HTTPException(status_code=404, detail="Dues configuration not found for this term")
+    # Allow reports even when dues config is missing for a track/term
+    # (e.g. SHS current term before dues are published).
+    dues_amount = dues.amount_ghs if dues else Decimal("0")
 
     track_enum: Optional[Track] = None
     if track:
@@ -56,9 +61,12 @@ async def financial_report(
             raise HTTPException(status_code=400, detail="track must be one of: BASIC, SHS")
         track_enum = Track.BASIC if t == "BASIC" else Track.SHS
 
-    student_filters = [Student.academic_year == academic_year, Student.is_active == True]
+    # Prefer track-scoped active students; academic_year on student can lag term year.
+    student_filters = [Student.is_active == True]
     if track_enum is not None:
         student_filters.append(Student.track == track_enum)
+    else:
+        student_filters.append(Student.academic_year == academic_year)
 
     total_students = (
         db.query(Student).filter(*student_filters).count()
@@ -83,7 +91,7 @@ async def financial_report(
     manual_collected = sum(m.amount_ghs for m in manual_paid) if manual_paid else Decimal(0)
 
     total_collected = online_collected + manual_collected
-    expected_total = dues.amount_ghs * total_students
+    expected_total = dues_amount * total_students
     paid_student_ids = {p.student_id for p in online_paid} | {m.student_id for m in manual_paid}
     paid_count = len(paid_student_ids)
     unpaid_count = max(total_students - paid_count, 0)
@@ -233,6 +241,9 @@ async def financial_report(
         "data": {
             "academic_year": academic_year,
             "term": term,
+            "track": track_enum.value if track_enum else None,
+            "dues_configured": dues is not None,
+            "dues_amount_ghs": str(dues_amount),
             "total_students": total_students,
             "expected_total_ghs": str(expected_total),
             "total_collected_ghs": str(total_collected),
@@ -334,10 +345,10 @@ async def create_expenditure(
     row = Expenditure(
         description=req.description,
         amount_ghs=req.amount_ghs,
-        date=req.date,
+        date=req.date or datetime.utcnow(),
         academic_year=req.academic_year,
         term=req.term,
-        recorded_by_user_id=admin["id"],
+        recorded_by_user_id=staff["id"],
     )
     db.add(row)
     db.commit()

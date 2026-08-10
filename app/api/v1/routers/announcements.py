@@ -7,9 +7,13 @@ from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import require_permission, get_current_user
-from app.models.announcement import Announcement, AnnouncementType
+from app.models.announcement import Announcement, AnnouncementAudience, AnnouncementType
 from app.models.parent import Parent
+from app.models.parent_student_link import ParentStudentLink
+from app.models.student import Student
+from app.models.class_level import Track
 from app.models.sms_log import SmsLog
+from app.schemas.announcement import AnnouncementAudience as AudienceSchema
 from app.schemas.announcement import AnnouncementCreate
 from app.services.sms import send_sms_background
 from app.services.activity_log import log_staff_activity
@@ -20,14 +24,65 @@ router = APIRouter(prefix="/announcements", tags=["Announcements"])
 
 def _serialize_announcement(announcement: Announcement) -> dict:
     urls = announcement.image_urls if isinstance(announcement.image_urls, list) else []
+    audience = announcement.audience_track or AnnouncementAudience.BOTH
     return {
         "id": str(announcement.id),
         "title": announcement.title,
         "body": announcement.body or "",
         "type": announcement.type.value if announcement.type else AnnouncementType.GENERAL.value,
+        "audience_track": audience.value if hasattr(audience, "value") else str(audience),
         "published_at": announcement.published_at.isoformat() if announcement.published_at else None,
         "image_urls": [str(u) for u in urls if u],
     }
+
+
+def _parse_audience(raw) -> AnnouncementAudience:
+    value = str(raw or "BOTH").strip().upper()
+    try:
+        return AnnouncementAudience(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="audience_track must be one of: BOTH, BASIC, SHS",
+        ) from exc
+
+
+def _matched_parents_for_audience(db: Session, audience: AnnouncementAudience) -> list[Parent]:
+    """Parents eligible for SMS / visibility for a track audience."""
+    base = db.query(Parent).filter(Parent.match_status == "MATCHED")
+    if audience == AnnouncementAudience.BOTH:
+        return base.all()
+
+    track = Track.BASIC if audience == AnnouncementAudience.BASIC else Track.SHS
+    return (
+        base.join(ParentStudentLink, ParentStudentLink.parent_id == Parent.id)
+        .join(Student, Student.id == ParentStudentLink.student_id)
+        .filter(Student.is_active == True, Student.track == track)
+        .distinct()
+        .all()
+    )
+
+
+def _parent_visible_audiences(db: Session, parent_id: str) -> set[AnnouncementAudience]:
+    tracks = {
+        row[0]
+        for row in (
+            db.query(Student.track)
+            .join(ParentStudentLink, ParentStudentLink.student_id == Student.id)
+            .filter(
+                ParentStudentLink.parent_id == parent_id,
+                Student.is_active == True,
+            )
+            .all()
+        )
+        if row[0] is not None
+    }
+    visible = {AnnouncementAudience.BOTH}
+    if Track.BASIC in tracks:
+        visible.add(AnnouncementAudience.BASIC)
+    if Track.SHS in tracks:
+        visible.add(AnnouncementAudience.SHS)
+    return visible
 
 
 def _parse_bool(value) -> bool:
@@ -130,6 +185,7 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
         body = str(form.get("body") or "").strip()
         type_raw = str(form.get("type") or "GENERAL").strip().upper()
         send_sms = _parse_bool(form.get("send_sms"))
+        audience = _parse_audience(form.get("audience_track"))
         image_urls = _normalize_image_urls(form.get("image_urls"))
         try:
             ann_type = AnnouncementType(type_raw)
@@ -143,6 +199,7 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
                 body=body,
                 type=ann_type,
                 send_sms=send_sms,
+                audience_track=AudienceSchema(audience.value),
                 image_urls=image_urls,
             ),
             _collect_upload_files(form),
@@ -183,6 +240,8 @@ async def _parse_update_payload(
                 fields["type"] = AnnouncementType(type_raw)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
+        if "audience_track" in form and str(form.get("audience_track") or "").strip():
+            fields["audience_track"] = _parse_audience(form.get("audience_track"))
         keep_urls = _parse_keep_urls(form.get("keep_image_urls")) if "keep_image_urls" in form else None
         return fields, _collect_upload_files(form), keep_urls
 
@@ -207,6 +266,8 @@ async def _parse_update_payload(
             fields["type"] = AnnouncementType(str(payload["type"]).strip().upper())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
+    if "audience_track" in payload and payload.get("audience_track") is not None:
+        fields["audience_track"] = _parse_audience(payload.get("audience_track"))
     keep_urls = _parse_keep_urls(payload.get("keep_image_urls")) if "keep_image_urls" in payload else None
     if "image_urls" in payload:
         # Full replace list from client (preferred path after /images upload).
@@ -244,10 +305,12 @@ async def create_announcement(
             detail=f"An announcement can have at most {MAX_IMAGES} images.",
         )
 
+    audience = _parse_audience(req.audience_track.value if req.audience_track else "BOTH")
     announcement = Announcement(
         title=req.title,
         body=req.body,
         type=req.type,
+        audience_track=audience,
         image_urls=image_urls,
     )
     db.add(announcement)
@@ -257,10 +320,15 @@ async def create_announcement(
     sms_dispatched = False
     recipients_count = 0
     if req.send_sms or req.type == AnnouncementType.URGENT:
-        parents = db.query(Parent).filter(Parent.match_status == "MATCHED").all()
+        parents = _matched_parents_for_audience(db, audience)
         phones = [p.phone for p in parents if p.phone]
         recipients_count = len(phones)
-        sms_body = f"{req.title}: {req.body[:140]}... —SchoolPulse"
+        track_label = {
+            AnnouncementAudience.BOTH: "All tracks",
+            AnnouncementAudience.BASIC: "KG-JHS",
+            AnnouncementAudience.SHS: "SHS",
+        }.get(audience, "All tracks")
+        sms_body = f"[{track_label}] {req.title}: {req.body[:120]}... —SchoolPulse"
         for phone in phones:
             background_tasks.add_task(send_sms_background, phone, sms_body)
             sms_log = SmsLog(
@@ -278,7 +346,7 @@ async def create_announcement(
         staff,
         page_label="Announcements",
         action_label=f"Published announcement: {announcement.title}",
-        details=announcement.type.value,
+        details=f"{announcement.type.value} · {audience.value}",
     )
 
     data = _serialize_announcement(announcement)
@@ -298,24 +366,25 @@ async def list_announcements(
     query = db.query(Announcement).filter(Announcement.is_active == True)
     if type:
         query = query.filter(Announcement.type == type)
+    announcements = query.order_by(Announcement.published_at.desc()).all()
     if current_user["role"] == "PARENT":
-        pass  # all announcements are published
-    total = query.count()
-    announcements = (
-        query.order_by(Announcement.published_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
+        visible = _parent_visible_audiences(db, str(current_user["id"]))
+        announcements = [
+            a
+            for a in announcements
+            if (a.audience_track or AnnouncementAudience.BOTH) in visible
+        ]
+    total = len(announcements)
+    page_rows = announcements[(page - 1) * limit : page * limit]
     return {
         "success": True,
         "data": {
-            "announcements": [_serialize_announcement(a) for a in announcements],
+            "announcements": [_serialize_announcement(a) for a in page_rows],
             "pagination": {
                 "page": page,
                 "limit": limit,
                 "total": total,
-                "total_pages": (total + limit - 1) // limit,
+                "total_pages": (total + limit - 1) // limit if limit else 1,
             },
         },
     }
@@ -342,6 +411,8 @@ async def update_announcement(
         announcement.body = fields["body"]
     if "type" in fields:
         announcement.type = fields["type"]
+    if "audience_track" in fields:
+        announcement.audience_track = fields["audience_track"]
 
     existing = [str(u) for u in (announcement.image_urls or []) if u]
     if "image_urls" in fields:
