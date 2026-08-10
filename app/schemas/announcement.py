@@ -15,6 +15,14 @@ class AnnouncementCreate(BaseModel):
     body: str
     type: AnnouncementType
     send_sms: bool = False
+    image_urls: list[str] = Field(default_factory=list)
+
+
+class AnnouncementUpdate(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    type: Optional[AnnouncementType] = None
+    image_urls: Optional[list[str]] = None
 
 
 class AnnouncementOut(BaseModel):

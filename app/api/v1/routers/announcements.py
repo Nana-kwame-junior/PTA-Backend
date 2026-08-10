@@ -1,6 +1,7 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, BackgroundTasks, Request, UploadFile
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from uuid import UUID
 from typing import Optional
 
@@ -37,11 +38,15 @@ def _parse_bool(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_upload_file(item) -> bool:
+    return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+
+
 def _collect_upload_files(form) -> list[UploadFile]:
     files: list[UploadFile] = []
     for key in ("images", "images[]", "image"):
         for item in form.getlist(key):
-            if isinstance(item, UploadFile) and item.filename:
+            if _is_upload_file(item):
                 files.append(item)
     seen: set[int] = set()
     unique: list[UploadFile] = []
@@ -52,6 +57,33 @@ def _collect_upload_files(form) -> list[UploadFile]:
         seen.add(oid)
         unique.append(f)
     return unique
+
+
+def _normalize_image_urls(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(u).strip() for u in raw if str(u).strip().startswith("https://")]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(u).strip() for u in parsed if str(u).strip().startswith("https://")]
+
+
+def _set_image_urls(announcement: Announcement, urls: list[str]) -> None:
+    if len(urls) > MAX_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"An announcement can have at most {MAX_IMAGES} images.",
+        )
+    announcement.image_urls = urls
+    flag_modified(announcement, "image_urls")
 
 
 def _parse_keep_urls(raw) -> Optional[list[str]]:
@@ -98,6 +130,7 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
         body = str(form.get("body") or "").strip()
         type_raw = str(form.get("type") or "GENERAL").strip().upper()
         send_sms = _parse_bool(form.get("send_sms"))
+        image_urls = _normalize_image_urls(form.get("image_urls"))
         try:
             ann_type = AnnouncementType(type_raw)
         except ValueError as exc:
@@ -105,7 +138,13 @@ async def _parse_create_payload(request: Request) -> tuple[AnnouncementCreate, l
         if not title or not body:
             raise HTTPException(status_code=400, detail="Title and body are required")
         return (
-            AnnouncementCreate(title=title, body=body, type=ann_type, send_sms=send_sms),
+            AnnouncementCreate(
+                title=title,
+                body=body,
+                type=ann_type,
+                send_sms=send_sms,
+                image_urls=image_urls,
+            ),
             _collect_upload_files(form),
         )
 
@@ -169,9 +208,24 @@ async def _parse_update_payload(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid announcement type") from exc
     keep_urls = _parse_keep_urls(payload.get("keep_image_urls")) if "keep_image_urls" in payload else None
-    if keep_urls is None and "image_urls" in payload:
-        keep_urls = _parse_keep_urls(payload.get("image_urls"))
+    if "image_urls" in payload:
+        # Full replace list from client (preferred path after /images upload).
+        fields["image_urls"] = _normalize_image_urls(payload.get("image_urls"))
+        keep_urls = None
     return fields, [], keep_urls
+
+
+@router.post("/images")
+async def upload_announcement_image_files(
+    images: list[UploadFile] = File(...),
+    staff=Depends(require_permission("announcements")),
+):
+    """Upload announcement images to Cloudinary and return HTTPS URLs."""
+    files = [f for f in images if _is_upload_file(f)]
+    if not files:
+        raise HTTPException(status_code=400, detail="No image files provided")
+    urls = await upload_announcement_images(files)
+    return {"success": True, "data": {"image_urls": urls}}
 
 
 @router.post("")
@@ -182,7 +236,13 @@ async def create_announcement(
     staff=Depends(require_permission("announcements")),
 ):
     req, files = await _parse_create_payload(request)
-    image_urls = await upload_announcement_images(files) if files else []
+    uploaded = await upload_announcement_images(files) if files else []
+    image_urls = list(req.image_urls or []) + uploaded
+    if len(image_urls) > MAX_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"An announcement can have at most {MAX_IMAGES} images.",
+        )
 
     announcement = Announcement(
         title=req.title,
@@ -284,13 +344,19 @@ async def update_announcement(
         announcement.type = fields["type"]
 
     existing = [str(u) for u in (announcement.image_urls or []) if u]
-    new_urls = await upload_announcement_images(files) if files else []
-    if keep_urls is not None or new_urls:
-        announcement.image_urls = _merge_image_urls(
-            existing,
-            keep_urls=keep_urls,
-            new_urls=new_urls,
-        )
+    if "image_urls" in fields:
+        _set_image_urls(announcement, fields["image_urls"])
+    else:
+        new_urls = await upload_announcement_images(files) if files else []
+        if keep_urls is not None or new_urls:
+            _set_image_urls(
+                announcement,
+                _merge_image_urls(
+                    existing,
+                    keep_urls=keep_urls,
+                    new_urls=new_urls,
+                ),
+            )
 
     db.commit()
     db.refresh(announcement)

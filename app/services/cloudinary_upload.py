@@ -86,11 +86,12 @@ async def upload_announcement_images(
                 resource_type="image",
                 overwrite=False,
             )
-        except Exception:
-            raise HTTPException(
-                status_code=502,
-                detail="Failed to upload image. Please try again.",
-            ) from None
+        except Exception as exc:
+            message = str(exc).strip() or "Failed to upload image. Please try again."
+            # Never leak credentials; Cloudinary errors are usually safe status text.
+            if "api_key" in message.lower() or "api_secret" in message.lower():
+                message = "Cloudinary rejected the upload. Check CLOUDINARY_* env vars on the server."
+            raise HTTPException(status_code=502, detail=message) from None
         url = result.get("secure_url") or result.get("url")
         if not url:
             raise HTTPException(status_code=502, detail="Image upload did not return a URL.")
