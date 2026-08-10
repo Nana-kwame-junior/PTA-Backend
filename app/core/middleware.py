@@ -55,9 +55,8 @@ def _client_key(request: Request) -> str:
 
 
 WEBHOOK_PATH_SUFFIXES = (
-    "/payments/webhook/paystack",
     "/payments/online/webhook",
-    "/payments/online/webhook/paystack",
+    "/payments/online/webhook/forward",
 )
 
 

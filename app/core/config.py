@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     paystack_public_key: str = "pk_test_xxxxxxxxxxxx"
     paystack_webhook_secret: str = "your-webhook-secret"
     paystack_base_url: str = "https://api.paystack.co"
+    # Optional: shared secret so Bizi (or a webhook router) can forward PTA
+    # events (mwl-* references) without replacing Bizi's Paystack webhook URL.
+    pta_webhook_forward_secret: str = ""
 
     # ── SMS Provider (mNotify) ─────────────────────────────────────
     sms_provider: str = "MNOTIFY"

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from uuid import UUID
 import uuid
@@ -211,7 +212,11 @@ async def initiate_payment(
         email=paystack_email,
         amount=amount_in_pesewas,
         reference=payment_ref,
-        metadata={"payment_id": str(payment.id), "student_id": str(req.student_id)},
+        metadata={
+            "payment_id": str(payment.id),
+            "student_id": str(req.student_id),
+            "app": "schoolpulse_pta",
+        },
     )
 
     if not result.get("status"):
@@ -266,12 +271,42 @@ async def verify_payment_reference(
     return {"success": True, "data": _serialize_payment(payment, student)}
 
 
+async def _apply_paystack_event(
+    *,
+    event: str | None,
+    reference: str | None,
+    background_tasks: BackgroundTasks,
+    db: Session,
+    pta_only: bool = False,
+) -> dict:
+    if not reference:
+        return {"status": "ok", "handled": False, "reason": "missing_reference"}
+    if pta_only and not str(reference).startswith("mwl-"):
+        # Ignore Bizi / other-app payments when events are forwarded from a shared router.
+        return {"status": "ok", "handled": False, "reason": "ignored_non_pta_reference"}
+
+    payment = db.query(Payment).filter(Payment.paystack_reference == reference).first()
+    if not payment:
+        return {"status": "ok", "handled": False, "reason": "unknown_reference"}
+
+    if event == "charge.success":
+        await _mark_payment_completed(payment, db, background_tasks)
+        return {"status": "ok", "handled": True, "reference": reference, "result": "completed"}
+
+    if event == "charge.failed" and payment.status != PaymentStatus.COMPLETED:
+        payment.status = PaymentStatus.FAILED
+        db.commit()
+        return {"status": "ok", "handled": True, "reference": reference, "result": "failed"}
+
+    return {"status": "ok", "handled": False, "reason": "unhandled_event"}
+
+
 async def process_paystack_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session,
 ) -> dict:
-    """Shared Paystack webhook handler (signature + charge.success / charge.failed)."""
+    """Direct Paystack webhook (HMAC with Paystack secret key)."""
     signature = request.headers.get("x-paystack-signature")
     if not signature:
         raise HTTPException(status_code=400, detail="Missing signature")
@@ -288,19 +323,13 @@ async def process_paystack_webhook(
     event = payload.get("event")
     data = payload.get("data") or {}
     reference = data.get("reference")
-
-    if event == "charge.success" and reference:
-        payment = db.query(Payment).filter(Payment.paystack_reference == reference).first()
-        if payment:
-            await _mark_payment_completed(payment, db, background_tasks)
-
-    elif event == "charge.failed" and reference:
-        payment = db.query(Payment).filter(Payment.paystack_reference == reference).first()
-        if payment and payment.status != PaymentStatus.COMPLETED:
-            payment.status = PaymentStatus.FAILED
-            db.commit()
-
-    return {"status": "ok"}
+    return await _apply_paystack_event(
+        event=event,
+        reference=reference,
+        background_tasks=background_tasks,
+        db=db,
+        pta_only=False,
+    )
 
 
 @router.post("/webhook")
@@ -309,23 +338,128 @@ async def paystack_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Canonical webhook: POST /api/v1/payments/online/webhook"""
+    """
+    PTA Paystack webhook (use this on a PTA-only Paystack account):
+    POST https://<PTA_HOST>/api/v1/payments/online/webhook
+
+    Do NOT point this at the Bizi webhook host.
+    """
     return await process_paystack_webhook(request, background_tasks, db)
 
 
-@router.post("/webhook/paystack")
-async def paystack_webhook_alias(
+@router.post("/webhook/forward")
+async def paystack_webhook_forward(
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Alias: POST /api/v1/payments/online/webhook/paystack"""
-    return await process_paystack_webhook(request, background_tasks, db)
+    """
+    Optional forward endpoint for a shared Paystack account.
+
+    Keep Paystack dashboard webhook on Bizi, then have Bizi (or a router)
+    forward only SchoolPulse events here with header:
+      X-PTA-Webhook-Secret: <PTA_WEBHOOK_FORWARD_SECRET>
+
+    Only references starting with mwl- are applied.
+    """
+    expected = (settings.pta_webhook_forward_secret or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Forward webhook is not configured. Set PTA_WEBHOOK_FORWARD_SECRET.",
+        )
+    provided = (request.headers.get("x-pta-webhook-secret") or "").strip()
+    if not provided or provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid forward secret")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    event = payload.get("event")
+    data = payload.get("data") or {}
+    reference = data.get("reference")
+    return await _apply_paystack_event(
+        event=event,
+        reference=reference,
+        background_tasks=background_tasks,
+        db=db,
+        pta_only=True,
+    )
+
+
+@router.post("/sync-pending")
+async def sync_pending_payments(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    parent=Depends(require_parent_match),
+):
+    """Re-check all PENDING Paystack payments for this parent against Paystack."""
+    if not paystack_is_configured():
+        raise HTTPException(status_code=503, detail="Paystack is not configured on the server")
+
+    linked_ids = [str(sid) for sid in (parent.get("matched_student_ids") or [])]
+    query = db.query(Payment).filter(Payment.status == PaymentStatus.PENDING)
+    if linked_ids:
+        query = query.filter(
+            or_(Payment.parent_id == parent["id"], Payment.student_id.in_(linked_ids))
+        )
+    else:
+        query = query.filter(Payment.parent_id == parent["id"])
+
+    pending = query.all()
+    completed = 0
+    failed = 0
+    still_pending = 0
+    for payment in pending:
+        if not payment.paystack_reference:
+            continue
+        result = await verify_transaction(payment.paystack_reference)
+        status = result.get("data", {}).get("status") if result.get("status") else None
+        if status == "success":
+            await _mark_payment_completed(payment, db, background_tasks)
+            completed += 1
+        elif status == "failed":
+            payment.status = PaymentStatus.FAILED
+            db.commit()
+            failed += 1
+        else:
+            still_pending += 1
+
+    return {
+        "success": True,
+        "data": {
+            "checked": len(pending),
+            "completed": completed,
+            "failed": failed,
+            "still_pending": still_pending,
+        },
+    }
 
 
 @router.get("/callback")
-async def paystack_callback(reference: str = None, trxref: str = None):
-    ref = (reference or trxref or "").replace('"', "")
+async def paystack_callback(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    reference: str = None,
+    trxref: str = None,
+):
+    """
+    Browser return URL after Paystack checkout.
+    Completes the payment via Paystack verify (works even when webhooks go to Bizi).
+    """
+    ref = (reference or trxref or "").replace('"', "").strip()
+    if ref and paystack_is_configured():
+        payment = db.query(Payment).filter(Payment.paystack_reference == ref).first()
+        if payment and payment.status != PaymentStatus.COMPLETED:
+            result = await verify_transaction(ref)
+            if result.get("status") and result.get("data", {}).get("status") == "success":
+                await _mark_payment_completed(payment, db, background_tasks)
+            elif result.get("data", {}).get("status") == "failed":
+                payment.status = PaymentStatus.FAILED
+                db.commit()
+
     deep_link = f"mawuli-pta://payment-callback?reference={ref}"
     html = f"""
     <!DOCTYPE html>
