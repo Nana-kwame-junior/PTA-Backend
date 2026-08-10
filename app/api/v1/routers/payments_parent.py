@@ -1,7 +1,6 @@
 """Parent-facing payment history (manual + online) for linked wards."""
 
 from datetime import datetime
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
@@ -30,7 +29,11 @@ def _student_payload(student: Student | None) -> dict | None:
 def _sort_key(item: dict):
     raw = item.get("paid_at") or item.get("created_at") or ""
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        # Normalize to naive UTC-ish for safe sorting across mixed inputs.
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
     except ValueError:
         return datetime.min
 
@@ -39,7 +42,7 @@ def _sort_key(item: dict):
 async def parent_payment_history(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    student_id: UUID | None = None,
+    student_id: str | None = None,
     db: Session = Depends(get_db),
     parent=Depends(require_parent_match),
 ):
@@ -48,7 +51,8 @@ async def parent_payment_history(
     Includes Paystack (online) and school-recorded manual payments.
     """
     linked_ids = [str(sid) for sid in (parent.get("matched_student_ids") or [])]
-    if not linked_ids:
+    parent_id = str(parent.get("id") or "")
+    if not linked_ids and not parent_id:
         return {
             "success": True,
             "data": {
@@ -57,8 +61,8 @@ async def parent_payment_history(
             },
         }
 
-    if student_id is not None:
-        sid = str(student_id)
+    if student_id is not None and str(student_id).strip():
+        sid = str(student_id).strip()
         if sid not in linked_ids:
             raise HTTPException(status_code=403, detail="Student not linked to this parent")
         student_ids = [sid]
@@ -68,17 +72,28 @@ async def parent_payment_history(
     students = {
         s.id: s
         for s in db.query(Student).filter(Student.id.in_(student_ids)).all()
-    }
+    } if student_ids else {}
 
     rows: list[dict] = []
+    scoped_to_one_student = bool(student_id and str(student_id).strip())
+
+    online_filters = []
+    if student_ids:
+        online_filters.append(Payment.student_id.in_(student_ids))
+    # When listing all history, also include payments initiated by this parent
+    # even if the ward link row is missing/outdated.
+    if parent_id and not scoped_to_one_student:
+        online_filters.append(Payment.parent_id == parent_id)
 
     online_payments = (
-        db.query(Payment)
-        .filter(Payment.student_id.in_(student_ids))
-        .all()
+        db.query(Payment).filter(or_(*online_filters)).all() if online_filters else []
     )
     for payment in online_payments:
         student = students.get(payment.student_id)
+        if student is None and payment.student_id:
+            student = db.query(Student).filter(Student.id == payment.student_id).first()
+            if student:
+                students[student.id] = student
         status = payment.status.value if payment.status else "PENDING"
         rows.append(
             {
@@ -100,17 +115,19 @@ async def parent_payment_history(
         )
 
     # Exclude allocation rows created from online Paystack (avoid double-counting).
-    manual_payments = (
-        db.query(ManualPayment)
-        .filter(ManualPayment.student_id.in_(student_ids))
-        .filter(
-            or_(
-                ManualPayment.notes.is_(None),
-                ~ManualPayment.notes.like("%Online:%"),
+    manual_payments = []
+    if student_ids:
+        manual_payments = (
+            db.query(ManualPayment)
+            .filter(ManualPayment.student_id.in_(student_ids))
+            .filter(
+                or_(
+                    ManualPayment.notes.is_(None),
+                    ~ManualPayment.notes.like("%Online:%"),
+                )
             )
+            .all()
         )
-        .all()
-    )
     for payment in manual_payments:
         student = students.get(payment.student_id)
         mode = payment.payment_mode.value if payment.payment_mode else "CASH"
