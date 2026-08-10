@@ -143,7 +143,7 @@ def _reminder_message(meeting: Meeting, reminder_type: str) -> str:
     label = labels.get(reminder_type, reminder_type)
     return (
         f"PTA Meeting Reminder ({label}): {meeting.title} on {when} at {clock}, "
-        f"{meeting.venue}. See the Mawuli PTA app. — Mawuli SHS PTA"
+        f"{meeting.venue}. See the Mawuli PTA app. — SchoolPulse"
     )
 
 
@@ -153,7 +153,7 @@ def _created_message(meeting: Meeting) -> str:
     prefix = "URGENT: " if meeting.category == AnnouncementType.URGENT else ""
     return (
         f"{prefix}PTA Meeting scheduled: {meeting.title} on {when} at {clock}, "
-        f"{meeting.venue}. You will receive reminders before the meeting. — Mawuli SHS PTA"
+        f"{meeting.venue}. You will receive reminders before the meeting. — SchoolPulse"
     )
 
 
@@ -163,15 +163,16 @@ def _updated_message(meeting: Meeting, *, old_date: datetime, old_time: str | No
     return (
         f"UPDATED PTA Meeting: {meeting.title} moved from {old_when} {old_time or ''} "
         f"to {new_when} at {meeting.time}, {meeting.venue}. "
-        f"(Was: {old_venue or 'previous venue'}). — Mawuli SHS PTA"
+        f"(Was: {old_venue or 'previous venue'}). — SchoolPulse"
     )
 
 
 def _cancelled_message(meeting: Meeting, reason: str) -> str:
     when = parse_meeting_start(meeting).strftime("%d %b %Y")
+    detail = (reason or "").strip() or "No further details provided"
     return (
         f"CANCELLED: The PTA meeting “{meeting.title}” on {when} at {meeting.time} "
-        f"has been cancelled. Reason: {reason}. — Mawuli SHS PTA"
+        f"has been cancelled. {detail} — SchoolPulse"
     )
 
 

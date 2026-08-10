@@ -82,7 +82,7 @@ Use your email address and the temporary password above to log in. You will be a
       <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,0.08);">
         <tr>
           <td style="background:linear-gradient(135deg,#0d9488,#0f766e);padding:28px 32px;color:#ffffff;">
-            <div style="font-size:13px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">Mawuli SHS PTA</div>
+            <div style="font-size:13px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">SchoolPulse</div>
             <h1 style="margin:12px 0 0;font-size:24px;font-weight:700;">Welcome to the Staff Portal</h1>
           </td>
         </tr>
@@ -143,7 +143,7 @@ If you did not request this, you can ignore this email.
     <tr><td align="center">
       <table width="100%" style="max-width:520px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,0.08);">
         <tr><td style="background:linear-gradient(135deg,#0d9488,#0f766e);padding:28px 32px;color:#ffffff;">
-          <div style="font-size:13px;opacity:0.9;">Mawuli SHS PTA</div>
+          <div style="font-size:13px;opacity:0.9;">SchoolPulse</div>
           <div style="font-size:24px;font-weight:700;margin-top:6px;">Password reset</div>
         </td></tr>
         <tr><td style="padding:32px;color:#334155;line-height:1.6;">

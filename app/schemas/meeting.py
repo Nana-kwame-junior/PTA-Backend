@@ -38,7 +38,7 @@ class MeetingUpdate(BaseModel):
 
 
 class MeetingCancel(BaseModel):
-    reason: str
+    reason: str = Field(..., min_length=3, max_length=500)
 
 
 class AttendanceRecord(BaseModel):
