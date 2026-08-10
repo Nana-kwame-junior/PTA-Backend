@@ -225,18 +225,23 @@ async def initiate_payment(
         message = result.get("message", "Paystack initialization failed")
         raise HTTPException(status_code=400, detail=message)
 
+    data = result.get("data") or {}
     return {
         "success": True,
         "data": {
             "paid_up": False,
             "payment_id": str(payment.id),
             "paystack_reference": payment_ref,
-            "authorization_url": result["data"]["authorization_url"],
+            "authorization_url": data.get("authorization_url"),
+            "access_code": data.get("access_code"),
+            "email": paystack_email,
+            "amount_pesewas": amount_in_pesewas,
             "amount_ghs": str(total_due),
             "breakdown": outstanding["breakdown"],
             "arrears_ghs": outstanding["arrears_ghs"],
             "current_term_amount_ghs": outstanding["current_term_amount_ghs"],
             "public_key": settings.paystack_public_key,
+            "callback_url": paystack_callback_url(),
         },
     }
 

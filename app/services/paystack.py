@@ -2,12 +2,31 @@ import httpx
 import json
 from app.core.config import settings
 
+# Deep link back into the SchoolPulse mobile app (never Bizi web).
+PTA_APP_CALLBACK = "mawuli-pta://payment-callback"
+# Fallback HTTPS host if API_BASE_URL is misconfigured to another product.
+PTA_DEFAULT_API_HOST = "https://mawuli-app.up.railway.app"
+
 
 def paystack_callback_url() -> str:
-    base = settings.api_base_url.rstrip("/")
+    """
+    Browser/hosted checkout return URL.
+
+    Prefer the PTA API callback (which deep-links into the app). Never use the
+    Bizi payment-app host — that is a different product sharing Paystack keys.
+    """
+    base = (settings.api_base_url or "").rstrip("/")
+    # Guard against pointing PTA checkout returns at the separate Bizi product.
+    if not base or "bizismart" in base.lower():
+        base = PTA_DEFAULT_API_HOST
     if base.endswith("/api/v1"):
         return f"{base}/payments/online/callback"
     return f"{base}/api/v1/payments/online/callback"
+
+
+def paystack_app_callback_url() -> str:
+    """Custom-scheme callback used when Paystack accepts it (mobile hosted checkout)."""
+    return PTA_APP_CALLBACK
 
 
 def paystack_is_configured() -> bool:
@@ -23,6 +42,7 @@ def paystack_is_configured() -> bool:
 
 
 async def initialize_transaction(email: str, amount: int, reference: str, metadata: dict):
+    callback = paystack_callback_url()
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{settings.paystack_base_url}/transaction/initialize",
@@ -31,8 +51,10 @@ async def initialize_transaction(email: str, amount: int, reference: str, metada
                 "email": email,
                 "amount": amount,
                 "reference": reference,
+                "currency": "GHS",
                 "metadata": metadata,
-                "callback_url": paystack_callback_url(),
+                # Must be the PTA API callback — never the Bizi website.
+                "callback_url": callback,
             },
         )
         try:
