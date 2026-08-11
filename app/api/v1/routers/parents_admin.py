@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -62,10 +62,12 @@ def _serialize_pending(db: Session, row: PendingMatch) -> dict:
 
 @router.get("")
 async def list_parents_overview(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     staff=Depends(require_permission("parents")),
 ):
-    """All registered parents plus pending ward-match approvals."""
+    """Registered parents (paginated) plus pending ward-match approvals."""
     pending_rows = (
         db.query(PendingMatch)
         .filter(PendingMatch.status == "PENDING")
@@ -74,12 +76,20 @@ async def list_parents_overview(
     )
     pending_matches = [_serialize_pending(db, row) for row in pending_rows]
 
-    parent_rows = (
+    parents_query = (
         db.query(Parent)
         .filter(Parent.full_name.isnot(None), Parent.full_name != "")
         .order_by(Parent.created_at.desc())
-        .all()
     )
+    total_parents = parents_query.count()
+    linked_parents_count = (
+        db.query(Parent.id)
+        .join(ParentStudentLink, ParentStudentLink.parent_id == Parent.id)
+        .filter(Parent.full_name.isnot(None), Parent.full_name != "")
+        .distinct()
+        .count()
+    )
+    parent_rows = parents_query.offset((page - 1) * limit).limit(limit).all()
     parents = []
     for parent in parent_rows:
         linked = _linked_students(db, parent.id)
@@ -102,7 +112,14 @@ async def list_parents_overview(
             "pending_matches": pending_matches,
             "pending_total": len(pending_matches),
             "parents": parents,
-            "total_parents": len(parents),
+            "total_parents": total_parents,
+            "linked_parents_count": linked_parents_count,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total_parents,
+                "total_pages": (total_parents + limit - 1) // limit if total_parents else 0,
+            },
         },
     }
 

@@ -370,6 +370,8 @@ async def create_expenditure(
 async def list_expenditures(
     academic_year: Optional[str] = None,
     term: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     staff=Depends(require_permission("reports")),
 ):
@@ -378,7 +380,9 @@ async def list_expenditures(
         query = query.filter(Expenditure.academic_year == academic_year)
     if term:
         query = query.filter(Expenditure.term == term)
-    rows = query.order_by(Expenditure.date.desc()).all()
+    query = query.order_by(Expenditure.date.desc())
+    total = query.count()
+    rows = query.offset((page - 1) * limit).limit(limit).all()
     return {
         "success": True,
         "data": {
@@ -392,6 +396,12 @@ async def list_expenditures(
                     "term": row.term,
                 }
                 for row in rows
-            ]
+            ],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": (total + limit - 1) // limit if total else 0,
+            },
         },
     }
