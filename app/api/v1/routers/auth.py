@@ -367,9 +367,17 @@ async def parent_register_resume_session(req: ParentPhoneRequest, db: Session = 
 
 @router.post("/web/login")
 async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email, User.is_active == True).first()
+    user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Your account has been deactivated. Contact the school admin "
+                "(chairperson@mawulishs.edu.gh) to request reactivation."
+            ),
+        )
     access_token = create_access_token({"sub": user.id, "role": user.role.value})
     refresh_token = create_refresh_token({"sub": user.id, "role": user.role.value})
     return {
@@ -796,5 +804,6 @@ async def reset_password_with_token(req: ResetPasswordTokenRequest, db: Session 
 
 
 @router.post("/logout")
-async def logout(current_user=Depends(get_current_user)):
+async def logout():
+    """Client clears tokens locally; always succeed so logout never surfaces auth errors."""
     return {"success": True, "data": {"message": "Logged out"}}

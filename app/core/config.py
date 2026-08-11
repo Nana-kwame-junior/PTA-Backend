@@ -77,12 +77,12 @@ class Settings(BaseSettings):
     # ── SMS Provider (mNotify) ─────────────────────────────────────
     sms_provider: str = "MNOTIFY"
     mnotify_api_key: str = ""
-    mnotify_sender_id: str = "MawuliPTA"
+    mnotify_sender_id: str = "SchoolPulse"
     # Staging only: log verification codes in server logs instead of sending SMS
     sms_dry_run: bool = False
 
     # ── Email (Brevo transactional API — staff invite / password reset) ─
-    pta_chairperson_email: str = "chairperson@mawulishs.edu.gh"
+    pta_chairperson_email: str = "isaiahdogah81@gmail.com"
     brevo_api_key: str = ""
     # Prefer BREVO_SENDER_EMAIL / BREVO_SENDER_NAME, or BREVO_FROM_EMAIL as "Name <email>"
     brevo_sender_email: str = ""
@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     school_name: str = "Mawuli Senior High School"
     school_index_prefix: str = "MWL"
     sms_sender_id: str = "MawuliPTA"
-    current_academic_year: str = "2024/2025"
+    current_academic_year: str = "2026/2027"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
