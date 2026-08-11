@@ -17,7 +17,7 @@ from app.services.otp_store import store_otp, fetch_otp, delete_otp
 from app.services.matching import find_matches
 from app.services.student_validation import validate_student_fields
 from app.models.parent import Parent, MatchStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.permissions import resolve_user_permissions
 from app.models.student import Student
 from app.models.pending_match import PendingMatch
@@ -371,11 +371,18 @@ async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
+        admin = (
+            db.query(User)
+            .filter(User.role == UserRole.ADMIN, User.is_active == True)
+            .order_by(User.created_at.asc())
+            .first()
+        )
+        admin_email = admin.email if admin else settings.pta_chairperson_email
         raise HTTPException(
             status_code=403,
             detail=(
                 "Your account has been deactivated. Contact the school admin "
-                "(chairperson@mawulishs.edu.gh) to request reactivation."
+                f"({admin_email}) to request reactivation."
             ),
         )
     access_token = create_access_token({"sub": user.id, "role": user.role.value})
