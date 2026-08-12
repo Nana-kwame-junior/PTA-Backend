@@ -55,7 +55,7 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
 
 
 def send_temporary_password_email(to_email: str, temp_password: str, user_name: str) -> bool:
-    login_url = settings.dashboard_url.rstrip("/") + "/login"
+    portal_url = settings.dashboard_url.rstrip("/") + "/"
     subject = "YourSchoolPulse PTA Staff Portal Access"
 
     text_body = f"""Hello {user_name},
@@ -66,7 +66,7 @@ Sign in with:
   Email: {to_email}
   Temporary password: {temp_password}
 
-Portal: {login_url}
+Portal: {portal_url}
 
 Use your email address and the temporary password above to log in. You will be asked to choose a new password immediately after signing in.
 
@@ -101,8 +101,8 @@ Use your email address and the temporary password above to log in. You will be a
               </td></tr>
             </table>
             <p style="margin:0 0 24px;">After signing in, you must set a new personal password before accessing the dashboard.</p>
-            <a href="{login_url}" style="display:inline-block;background:#f97316;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:999px;font-weight:700;">Open Staff Portal</a>
-            <p style="margin:24px 0 0;font-size:13px;color:#64748b;">If the button does not work, copy this link:<br><a href="{login_url}" style="color:#0d9488;">{login_url}</a></p>
+            <a href="{portal_url}" style="display:inline-block;background:#f97316;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:999px;font-weight:700;">Open Staff Portal</a>
+            <p style="margin:24px 0 0;font-size:13px;color:#64748b;">If the button does not work, copy this link:<br><a href="{portal_url}" style="color:#0d9488;">{portal_url}</a></p>
           </td>
         </tr>
         <tr>

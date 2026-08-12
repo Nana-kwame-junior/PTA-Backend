@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api/v1"
     api_base_url: str = "http://localhost:8000"
-    dashboard_url: str = "http://localhost:5173"
+    dashboard_url: str = "https://pta-frontend-dashboard-gules.vercel.app"
 
     # ── Database ───────────────────────────────────────────────────
     # Setting either one of DATABASE_URL / DATABASE_URL_SYNC is enough — the other
