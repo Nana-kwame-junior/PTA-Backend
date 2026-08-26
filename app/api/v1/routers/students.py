@@ -10,6 +10,7 @@ from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest,
 from app.services.student_validation import validate_student_fields, normalize_gender, normalize_form_name
 from app.services.class_level_names import find_class_level
 from app.services.activity_log import log_staff_activity
+from app.utils.phone import PhoneValidationError, coerce_stored_phone, parse_optional_ghana_phone
 import csv
 import io
 from uuid import UUID
@@ -27,8 +28,8 @@ def _serialize_student(student: Student) -> dict:
         "stream": student.stream,
         "track": str(student.track.value) if hasattr(student.track, 'value') else str(student.track) if student.track else None,
         "academic_year": student.academic_year,
-        "parent_phone_1": student.parent_phone_1,
-        "parent_phone_2": student.parent_phone_2,
+        "parent_phone_1": coerce_stored_phone(student.parent_phone_1),
+        "parent_phone_2": coerce_stored_phone(student.parent_phone_2),
         "is_active": student.is_active,
         "graduated_basic_at": student.graduated_basic_at.isoformat() if student.graduated_basic_at else None,
         "graduated_shs_at": student.graduated_shs_at.isoformat() if student.graduated_shs_at else None,
@@ -38,29 +39,29 @@ def _serialize_student(student: Student) -> dict:
 # Columns differ by stage. Import uses DictReader so unused columns can be omitted.
 SAMPLE_CSV_PRIMARY = (
     "full_name,gender,form,parent_phone_1,parent_phone_2\n"
-    "Ama Adjei,F,KG,+233241234567,\n"
-    "Kwame Mensah,M,Primary 1,+233241234568,+233501111111\n"
-    "Akosua Boateng,F,Primary 2,+233244567890,\n"
-    "Yaw Asante,M,Primary 4,+233551234567,\n"
-    "Efua Darko,F,Primary 6,+233501234567,+233242222333\n"
+    "Ama Adjei,F,KG,'+233241234567,\n"
+    "Kwame Mensah,M,Primary 1,'+233241234568,'+233501111111\n"
+    "Akosua Boateng,F,Primary 2,'+233244567890,\n"
+    "Yaw Asante,M,Primary 4,'+233551234567,\n"
+    "Efua Darko,F,Primary 6,'+233501234567,'+233242222333\n"
 )
 
 SAMPLE_CSV_JHS = (
     "index_number,full_name,gender,form,parent_phone_1,parent_phone_2\n"
-    ",Kofi Owusu,M,JHS 1,+233241111222,\n"
-    ",Abena Sarpong,F,JHS 1,+233242222333,\n"
-    ",Kojo Boateng,M,JHS 2,+233244567890,\n"
-    "0111025001,Yaw Ofori,M,JHS 3,+233551234567,\n"
-    "0111025002,Efua Nkrumah,F,JHS 3,+233501234567,+233241000001\n"
+    ",Kofi Owusu,M,JHS 1,'+233241111222,\n"
+    ",Abena Sarpong,F,JHS 1,'+233242222333,\n"
+    ",Kojo Boateng,M,JHS 2,'+233244567890,\n"
+    "0111025001,Yaw Ofori,M,JHS 3,'+233551234567,\n"
+    "0111025002,Efua Nkrumah,F,JHS 3,'+233501234567,'+233241000001\n"
 )
 
 SAMPLE_CSV_SHS = (
     "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
-    "0111025101,Ama Serwah,F,Form 1,General Arts,+233241111222,\n"
-    "0111025102,Kojo Appiah,M,Form 1,General Science,+233242222333,\n"
-    "0111025103,Esi Kwansah,F,Form 2,Business,+233503333444,\n"
-    "0111025104,Kwaku Adjei,M,Form 2,Home Economics,+233244567890,\n"
-    "0111025105,Akua Mensah,F,Form 3,Visual Arts,+233551234567,+233501000002\n"
+    "0111025101,Ama Serwah,F,Form 1,General Arts,'+233241111222,\n"
+    "0111025102,Kojo Appiah,M,Form 1,General Science,'+233242222333,\n"
+    "0111025103,Esi Kwansah,F,Form 2,Business,'+233503333444,\n"
+    "0111025104,Kwaku Adjei,M,Form 2,Home Economics,'+233244567890,\n"
+    "0111025105,Akua Mensah,F,Form 3,Visual Arts,'+233551234567,'+233501000002\n"
 )
 
 _SAMPLE_BY_KIND = {
@@ -132,6 +133,15 @@ async def import_students(
                     raise ValueError(f"Duplicate index number {idx}")
             _level = find_class_level(db, form_name)
             _form_track = _level.track if _level else Track.BASIC
+            try:
+                phone_1 = parse_optional_ghana_phone(
+                    _csv_cell(normalized_row, "parent_phone_1", "phone", "phone_1") or None
+                )
+                phone_2 = parse_optional_ghana_phone(
+                    _csv_cell(normalized_row, "parent_phone_2", "phone_2") or None
+                )
+            except PhoneValidationError as e:
+                raise ValueError(str(e)) from e
             student = Student(
                 index_number=idx,
                 full_name=full_name,
@@ -140,8 +150,8 @@ async def import_students(
                 stream=strm,
                 track=_form_track,
                 academic_year=academic_year.strip(),
-                parent_phone_1=_csv_cell(normalized_row, "parent_phone_1", "phone", "phone_1") or None,
-                parent_phone_2=_csv_cell(normalized_row, "parent_phone_2", "phone_2") or None,
+                parent_phone_1=phone_1,
+                parent_phone_2=phone_2,
             )
             db.add(student)
             imported += 1
@@ -262,7 +272,9 @@ async def create_student(
         idx, strm, gender = validate_student_fields(
             db, form_name, data.index_number, data.stream, data.gender
         )
-    except ValueError as e:
+        phone_1 = parse_optional_ghana_phone(data.parent_phone_1)
+        phone_2 = parse_optional_ghana_phone(data.parent_phone_2)
+    except (ValueError, PhoneValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     _level = find_class_level(db, form_name)
@@ -275,8 +287,8 @@ async def create_student(
         stream=strm,
         track=_form_track,
         academic_year=data.academic_year,
-        parent_phone_1=data.parent_phone_1,
-        parent_phone_2=data.parent_phone_2,
+        parent_phone_1=phone_1,
+        parent_phone_2=phone_2,
     )
     db.add(student)
     try:
@@ -312,7 +324,11 @@ async def update_student(
     gender = payload.get("gender", student.gender)
     try:
         idx, strm, g = validate_student_fields(db, form, index_number, stream, gender)
-    except ValueError as e:
+        if "parent_phone_1" in payload:
+            payload["parent_phone_1"] = parse_optional_ghana_phone(payload.get("parent_phone_1"))
+        if "parent_phone_2" in payload:
+            payload["parent_phone_2"] = parse_optional_ghana_phone(payload.get("parent_phone_2"))
+    except (ValueError, PhoneValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     payload["index_number"] = idx
     payload["stream"] = strm
