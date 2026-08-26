@@ -35,25 +35,63 @@ def _serialize_student(student: Student) -> dict:
     }
 
 
-SAMPLE_CSV = (
-    "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
-    ",Ama Adjei,F,KG,,+233241234567,\n"
-    ",Kwame Adjei,M,Primary 2,,+233241234567,\n"
-    ",Kofi Mensah,M,JHS 1,,+233244567890,\n"
-    "0111025007,Yaw Ofori,M,JHS 2,,+233551234567,\n"
-    "0111025099,Efua Darko,F,JHS 3,,+233501234567,\n"
-    ",Ama Serwah,F,Form 1,General Arts,+233241111222,\n"
-    ",Kojo Boateng,M,Form 2,Science,+233242222333,\n"
-    "0001234567,Esi Kwansah,F,Form 3,Business,+233503333444,\n"
+# Columns differ by stage. Import uses DictReader so unused columns can be omitted.
+SAMPLE_CSV_PRIMARY = (
+    "full_name,gender,form,parent_phone_1,parent_phone_2\n"
+    "Ama Adjei,F,KG,+233241234567,\n"
+    "Kwame Mensah,M,Primary 1,+233241234568,+233501111111\n"
+    "Akosua Boateng,F,Primary 2,+233244567890,\n"
+    "Yaw Asante,M,Primary 4,+233551234567,\n"
+    "Efua Darko,F,Primary 6,+233501234567,+233242222333\n"
 )
+
+SAMPLE_CSV_JHS = (
+    "index_number,full_name,gender,form,parent_phone_1,parent_phone_2\n"
+    ",Kofi Owusu,M,JHS 1,+233241111222,\n"
+    ",Abena Sarpong,F,JHS 1,+233242222333,\n"
+    ",Kojo Boateng,M,JHS 2,+233244567890,\n"
+    "0111025001,Yaw Ofori,M,JHS 3,+233551234567,\n"
+    "0111025002,Efua Nkrumah,F,JHS 3,+233501234567,+233241000001\n"
+)
+
+SAMPLE_CSV_SHS = (
+    "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
+    "0111025101,Ama Serwah,F,Form 1,General Arts,+233241111222,\n"
+    "0111025102,Kojo Appiah,M,Form 1,General Science,+233242222333,\n"
+    "0111025103,Esi Kwansah,F,Form 2,Business,+233503333444,\n"
+    "0111025104,Kwaku Adjei,M,Form 2,Home Economics,+233244567890,\n"
+    "0111025105,Akua Mensah,F,Form 3,Visual Arts,+233551234567,+233501000002\n"
+)
+
+_SAMPLE_BY_KIND = {
+    "primary": ("students_import_primary.csv", SAMPLE_CSV_PRIMARY),
+    "jhs": ("students_import_jhs.csv", SAMPLE_CSV_JHS),
+    "shs": ("students_import_shs.csv", SAMPLE_CSV_SHS),
+}
+
+
+def _csv_cell(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = (row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 @router.get("/import/sample")
-async def download_import_sample(staff=Depends(require_permission("students"))):
+async def download_import_sample(
+    kind: str = Query(..., description="primary, jhs, or shs"),
+    staff=Depends(require_permission("students")),
+):
+    key = (kind or "").strip().lower()
+    sample = _SAMPLE_BY_KIND.get(key)
+    if not sample:
+        raise HTTPException(status_code=400, detail="kind must be one of: primary, jhs, shs")
+    filename, body = sample
     return StreamingResponse(
-        iter([SAMPLE_CSV]),
+        iter([body]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=students_import_sample.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
@@ -72,19 +110,21 @@ async def import_students(
     row_count = 0
     for i, row in enumerate(csv_reader):
         row_count = i + 1
-        normalized_row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        normalized_row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         try:
-            form_name = normalize_form_name(normalized_row.get("form", ""))
+            form_raw = _csv_cell(normalized_row, "form", "class", "level")
+            full_name = _csv_cell(normalized_row, "full_name", "name")
+            form_name = normalize_form_name(form_raw)
             if not form_name:
                 raise ValueError("form is required")
-            if not normalized_row.get("full_name"):
+            if not full_name:
                 raise ValueError("full_name is required")
             idx, strm, gender = validate_student_fields(
                 db,
                 form_name,
-                normalized_row.get("index_number"),
-                normalized_row.get("stream"),
-                normalized_row.get("gender"),
+                _csv_cell(normalized_row, "index_number", "index") or None,
+                _csv_cell(normalized_row, "stream", "programme", "program") or None,
+                _csv_cell(normalized_row, "gender") or None,
             )
             if idx:
                 dup = db.query(Student).filter(Student.index_number == idx).first()
@@ -94,14 +134,14 @@ async def import_students(
             _form_track = _level.track if _level else Track.BASIC
             student = Student(
                 index_number=idx,
-                full_name=normalized_row["full_name"],
+                full_name=full_name,
                 gender=gender,
                 form=form_name,
                 stream=strm,
                 track=_form_track,
                 academic_year=academic_year.strip(),
-                parent_phone_1=normalized_row.get("parent_phone_1") or None,
-                parent_phone_2=normalized_row.get("parent_phone_2") or None,
+                parent_phone_1=_csv_cell(normalized_row, "parent_phone_1", "phone", "phone_1") or None,
+                parent_phone_2=_csv_cell(normalized_row, "parent_phone_2", "phone_2") or None,
             )
             db.add(student)
             imported += 1
