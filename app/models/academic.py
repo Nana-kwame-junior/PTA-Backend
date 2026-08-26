@@ -14,9 +14,10 @@ class TermStatus(str, enum.Enum):
 
 class AcademicYear(Base):
     __tablename__ = "academic_years"
+    __table_args__ = (UniqueConstraint("label", "track", name="uq_academic_year_label_track"),)
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    label = Column(String(20), unique=True, nullable=False)
+    label = Column(String(20), nullable=False)
     track = Column(SQLEnum(Track, name="classleveltrack"), nullable=False, default=Track.BASIC)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

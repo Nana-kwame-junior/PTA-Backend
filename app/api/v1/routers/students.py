@@ -130,6 +130,7 @@ async def list_students(
     academic_year: str = None,
     is_active: bool = None,
     track: str = None,
+    graduation: str = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("students")),
 ):
@@ -145,11 +146,27 @@ async def list_students(
         query = query.filter(Student.stream == stream)
     if academic_year:
         query = query.filter(Student.academic_year == academic_year)
-    if is_active is not None:
-        query = query.filter(Student.is_active == is_active)
     if track:
         track_enum = Track.BASIC if str(track).strip().upper() == "BASIC" else Track.SHS
         query = query.filter(Student.track == track_enum)
+
+    graduation_key = (graduation or "").strip().lower()
+    if graduation_key:
+        if graduation_key not in {"jhs", "shs"}:
+            raise HTTPException(status_code=400, detail="graduation must be one of: jhs, shs")
+        if graduation_key == "jhs":
+            query = query.filter(
+                Student.graduated_basic_at.isnot(None),
+                Student.graduated_shs_at.is_(None),
+                Student.is_active == False,
+            ).order_by(Student.graduated_basic_at.desc())
+        else:
+            query = query.filter(Student.graduated_shs_at.isnot(None)).order_by(
+                Student.graduated_shs_at.desc()
+            )
+    elif is_active is not None:
+        query = query.filter(Student.is_active == is_active)
+
     total = query.count()
     students = query.offset((page - 1) * limit).limit(limit).all()
     return {

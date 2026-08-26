@@ -8,7 +8,8 @@ from app.core.database import get_db
 from app.core.security import require_permission, get_current_user
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
 from app.models.class_level import Track
-from app.services.promotion import promote_students_for_year
+from app.services.activity_log import log_staff_activity
+from app.services.promotion import promote_students_for_year, stamp_active_students_academic_year
 
 router = APIRouter(prefix="/admin/academic", tags=["Academic Calendar"])
 
@@ -39,6 +40,20 @@ def _serialize_term(row: AcademicTerm) -> dict:
     }
 
 
+def _track_max_sequence(track: Track) -> int:
+    return 3 if track == Track.BASIC else 2
+
+
+def _is_final_term(term: AcademicTerm) -> bool:
+    return int(term.sequence) == _track_max_sequence(term.track)
+
+
+def _maybe_stamp_new_year(db: Session, term: AcademicTerm) -> int:
+    if int(term.sequence) != 1:
+        return 0
+    return stamp_active_students_academic_year(db, term.track, term.academic_year)
+
+
 @router.post("/years")
 async def create_academic_year(
     body: dict,
@@ -56,9 +71,16 @@ async def create_academic_year(
         if track_str not in {"BASIC", "SHS"}:
             raise HTTPException(status_code=400, detail="track must be one of: BASIC, SHS")
         track_value = Track.BASIC if track_str == "BASIC" else Track.SHS
-    existing = db.query(AcademicYear).filter(AcademicYear.label == label).first()
+    existing = (
+        db.query(AcademicYear)
+        .filter(AcademicYear.label == label, AcademicYear.track == track_value)
+        .first()
+    )
     if existing:
-        raise HTTPException(status_code=409, detail="Academic year already exists")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Academic year {label} already exists for {track_value.value}",
+        )
     row = AcademicYear(label=label, track=track_value, is_active=True)
     db.add(row)
     db.commit()
@@ -139,6 +161,7 @@ async def create_academic_term(
     if not has_current:
         term.is_current = True
         term.status = TermStatus.ACTIVE
+        _maybe_stamp_new_year(db, term)
         db.commit()
         db.refresh(term)
 
@@ -209,6 +232,7 @@ async def activate_term(
     db.query(AcademicTerm).filter(AcademicTerm.is_current == True, AcademicTerm.track == term.track).update({"is_current": False})
     term.is_current = True
     term.status = TermStatus.ACTIVE
+    _maybe_stamp_new_year(db, term)
     db.commit()
     db.refresh(term)
     return {"success": True, "data": _serialize_term(term)}
@@ -227,13 +251,14 @@ async def close_term(
     if term.status == TermStatus.CLOSED:
         raise HTTPException(status_code=400, detail="Term is already closed")
 
-    promote = body.get("promote_students") if body else None
-    if promote is None:
-        promote = term.auto_promote_on_close
-
-    max_seq = 3 if term.track == Track.BASIC else 2
-    if promote and int(term.sequence) != max_seq:
-        raise HTTPException(status_code=400, detail=f"Promotion is only allowed when closing the final term of the track. {term.name!r} is sequence {term.sequence} out of {max_seq} for track={term.track.value}. There {'is' if (max_seq - term.sequence) == 1 else 'are'} {max_seq - term.sequence} term(s) remaining.")
+    requested = body.get("promote_students") if body else None
+    is_final = _is_final_term(term)
+    if not is_final:
+        promote = False
+    elif requested is None:
+        promote = bool(term.auto_promote_on_close)
+    else:
+        promote = bool(requested)
 
     term.status = TermStatus.CLOSED
     if term.is_current:
@@ -244,6 +269,33 @@ async def close_term(
         promotion_result = promote_students_for_year(db, term.academic_year, term.track)
     db.commit()
     db.refresh(term)
+
+    track_label = term.track.value if hasattr(term.track, "value") else str(term.track)
+    try:
+        if promotion_result:
+            log_staff_activity(
+                db,
+                admin,
+                page_label="Academic",
+                action_label=f"Closed {term.name} {term.academic_year} ({track_label}) with promotion",
+                details=(
+                    f"promoted={promotion_result.get('promoted', 0)}, "
+                    f"graduated_basic={promotion_result.get('graduated_basic', 0)}, "
+                    f"graduated_shs={promotion_result.get('graduated_shs', 0)}, "
+                    f"unchanged={promotion_result.get('unchanged', 0)}"
+                ),
+            )
+        else:
+            log_staff_activity(
+                db,
+                admin,
+                page_label="Academic",
+                action_label=f"Closed {term.name} {term.academic_year} ({track_label})",
+                details="Classes unchanged",
+            )
+    except Exception:
+        pass
+
     return {
         "success": True,
         "data": {

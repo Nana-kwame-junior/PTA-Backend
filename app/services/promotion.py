@@ -1,7 +1,9 @@
 """Promote students using admin-configured class levels (two independent tracks)."""
 
+from collections import defaultdict
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.class_level import ClassLevel, Track
@@ -16,6 +18,7 @@ def _promotion_map(db: Session) -> dict[str, dict]:
     """
     Returns mapping of canonical level name -> dict describing what happens next.
 
+    Built per track so a BASIC level never promotes into SHS (and vice versa).
     Entry shape:
       {"kind": "promote", "next": "Form 2"}  or
       {"kind": "graduate_basic"}             (BASIC terminal -> JHS 3)          or
@@ -30,29 +33,31 @@ def _promotion_map(db: Session) -> dict[str, dict]:
         .order_by(ClassLevel.sequence.asc())
         .all()
     )
-    mapping: dict[str, dict] = {}
-    for index, level in enumerate(levels):
-        try:
-            key = normalize_class_level_name(level.name)
-        except ValueError:
-            continue
+    by_track: dict[Track, list[ClassLevel]] = defaultdict(list)
+    for level in levels:
+        by_track[level.track].append(level)
 
-        if level.is_terminal:
-            if level.track == Track.SHS:
-                mapping[key] = {"kind": "graduate_shs"}
-            else:
-                mapping[key] = {"kind": "graduate_basic"}
-        elif index + 1 < len(levels):
-            next_level = levels[index + 1]
-            if next_level.track != level.track:
-                # Cross-track gap is never an automatic promotion.
-                # Student stays unchanged until an explicit enroll-shs admin action.
-                continue
+    mapping: dict[str, dict] = {}
+    for track_levels in by_track.values():
+        track_levels.sort(key=lambda row: row.sequence)
+        for index, level in enumerate(track_levels):
             try:
-                next_name = normalize_class_level_name(next_level.name)
+                key = normalize_class_level_name(level.name)
             except ValueError:
-                next_name = next_level.name
-            mapping[key] = {"kind": "promote", "next": next_name}
+                continue
+
+            if level.is_terminal:
+                if level.track == Track.SHS:
+                    mapping[key] = {"kind": "graduate_shs"}
+                else:
+                    mapping[key] = {"kind": "graduate_basic"}
+            elif index + 1 < len(track_levels):
+                next_level = track_levels[index + 1]
+                try:
+                    next_name = normalize_class_level_name(next_level.name)
+                except ValueError:
+                    next_name = next_level.name
+                mapping[key] = {"kind": "promote", "next": next_name}
 
     return mapping
 
@@ -62,11 +67,22 @@ def _level_requires_index(db: Session, level_name: str) -> bool:
     return bool(level and level.requires_index_number)
 
 
+def stamp_active_students_academic_year(db: Session, track: Track, academic_year: str) -> int:
+    """Mark every active student on this track as belonging to the new academic year."""
+    return (
+        db.query(Student)
+        .filter(Student.is_active == True, Student.track == track)
+        .update({Student.academic_year: academic_year}, synchronize_session=False)
+    )
+
+
 def promote_students_for_year(db: Session, academic_year: str, track: Track) -> dict:
     """
     Move each active student to the next configured class level WITHIN THEIR TRACK.
 
-    Only students matching both academic_year AND Student.track == track are processed. Cross-track contamination is impossible even when labels collide.
+    Includes students whose academic_year is the closed year or earlier (lagged
+    records from a previous year that never got restamped). Students already
+    stamped with a later year (e.g. new Form 1 intake) are left alone.
 
     Terminal level behavior:
       * JHS 3 (BASIC terminal)  -> graduated_basic_at = now(), is_active=False.
@@ -88,7 +104,15 @@ def promote_students_for_year(db: Session, academic_year: str, track: Track) -> 
 
     students = (
         db.query(Student)
-        .filter(Student.is_active == True, Student.academic_year == academic_year, Student.track == track)
+        .filter(
+            Student.is_active == True,
+            Student.track == track,
+            or_(
+                Student.academic_year.is_(None),
+                Student.academic_year == "",
+                Student.academic_year <= academic_year,
+            ),
+        )
         .all()
     )
     promoted = 0
@@ -108,7 +132,11 @@ def promote_students_for_year(db: Session, academic_year: str, track: Track) -> 
             unchanged += 1
             continue
 
-        canonical = level.name
+        try:
+            canonical = normalize_class_level_name(level.name)
+        except ValueError:
+            unchanged += 1
+            continue
         if canonical not in ladder:
             unchanged += 1
             continue
@@ -119,6 +147,7 @@ def promote_students_for_year(db: Session, academic_year: str, track: Track) -> 
         if kind == "promote":
             next_form = step["next"]
             student.form = next_form
+            student.academic_year = academic_year
             next_level = find_class_level(db, next_form)
             if next_level:
                 student.track = next_level.track
