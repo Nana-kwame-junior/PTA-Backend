@@ -15,16 +15,28 @@ from app.services.promotion import promote_students_for_year, stamp_active_stude
 router = APIRouter(prefix="/admin/academic", tags=["School Calendar"])
 
 
-def _serialize_year(row: AcademicYear, term_count: int = 0) -> dict:
+def _serialize_year(row: AcademicYear, term_count: int = 0, closed_count: int = 0) -> dict:
     track = str(row.track.value) if hasattr(row.track, "value") else str(row.track) if row.track else None
     max_periods = 2 if track == "SHS" else 3
+    terms = int(term_count or 0)
+    closed = int(closed_count or 0)
+    is_complete = terms >= max_periods and closed >= max_periods
+    if is_complete:
+        status = "ended"
+    elif terms:
+        status = "in_progress"
+    else:
+        status = "setup"
     return {
         "id": row.id,
         "label": row.label,
         "track": track,
         "is_active": row.is_active,
-        "term_count": int(term_count or 0),
+        "term_count": terms,
+        "closed_count": closed,
         "max_periods": max_periods,
+        "is_complete": is_complete,
+        "status": status,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -111,9 +123,23 @@ async def list_academic_years(
             .all()
         )
     }
+    closed_counts = {
+        str(year_id): int(n)
+        for year_id, n in (
+            db.query(AcademicTerm.academic_year_id, func.count(AcademicTerm.id))
+            .filter(AcademicTerm.status == TermStatus.CLOSED)
+            .group_by(AcademicTerm.academic_year_id)
+            .all()
+        )
+    }
     return {
         "success": True,
-        "data": {"years": [_serialize_year(r, counts.get(str(r.id), 0)) for r in rows]},
+        "data": {
+            "years": [
+                _serialize_year(r, counts.get(str(r.id), 0), closed_counts.get(str(r.id), 0))
+                for r in rows
+            ]
+        },
     }
 
 
@@ -291,6 +317,29 @@ async def close_term(
     promotion_result = None
     if promote:
         promotion_result = promote_students_for_year(db, term.academic_year, term.track)
+
+    db.flush()
+
+    year_ended = False
+    year_row = db.query(AcademicYear).filter(AcademicYear.id == term.academic_year_id).first()
+    if year_row:
+        remaining_open = (
+            db.query(AcademicTerm)
+            .filter(
+                AcademicTerm.academic_year_id == year_row.id,
+                AcademicTerm.status != TermStatus.CLOSED,
+            )
+            .count()
+        )
+        total_terms = (
+            db.query(AcademicTerm)
+            .filter(AcademicTerm.academic_year_id == year_row.id)
+            .count()
+        )
+        if remaining_open == 0 and total_terms >= _track_max_sequence(year_row.track):
+            year_row.is_active = False
+            year_ended = True
+
     db.commit()
     db.refresh(term)
 
@@ -325,5 +374,6 @@ async def close_term(
         "data": {
             "term": _serialize_term(term),
             "promotion": promotion_result,
+            "year_ended": year_ended,
         },
     }
