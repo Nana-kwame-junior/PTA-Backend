@@ -10,6 +10,7 @@ from app.schemas.student import StudentCreate, StudentUpdate, LinkParentRequest,
 from app.services.student_validation import validate_student_fields, normalize_gender, normalize_form_name
 from app.services.class_level_names import find_class_level
 from app.services.activity_log import log_staff_activity
+from app.utils.phone import PhoneValidationError, coerce_stored_phone, parse_optional_ghana_phone
 import csv
 import io
 from uuid import UUID
@@ -27,33 +28,71 @@ def _serialize_student(student: Student) -> dict:
         "stream": student.stream,
         "track": str(student.track.value) if hasattr(student.track, 'value') else str(student.track) if student.track else None,
         "academic_year": student.academic_year,
-        "parent_phone_1": student.parent_phone_1,
-        "parent_phone_2": student.parent_phone_2,
+        "parent_phone_1": coerce_stored_phone(student.parent_phone_1),
+        "parent_phone_2": coerce_stored_phone(student.parent_phone_2),
         "is_active": student.is_active,
         "graduated_basic_at": student.graduated_basic_at.isoformat() if student.graduated_basic_at else None,
         "graduated_shs_at": student.graduated_shs_at.isoformat() if student.graduated_shs_at else None,
     }
 
 
-SAMPLE_CSV = (
-    "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
-    ",Ama Adjei,F,KG,,+233241234567,\n"
-    ",Kwame Adjei,M,Primary 2,,+233241234567,\n"
-    ",Kofi Mensah,M,JHS 1,,+233244567890,\n"
-    "0111025007,Yaw Ofori,M,JHS 2,,+233551234567,\n"
-    "0111025099,Efua Darko,F,JHS 3,,+233501234567,\n"
-    ",Ama Serwah,F,Form 1,General Arts,+233241111222,\n"
-    ",Kojo Boateng,M,Form 2,Science,+233242222333,\n"
-    "0001234567,Esi Kwansah,F,Form 3,Business,+233503333444,\n"
+# Columns differ by stage. Import uses DictReader so unused columns can be omitted.
+SAMPLE_CSV_PRIMARY = (
+    "full_name,gender,form,parent_phone_1,parent_phone_2\n"
+    "Ama Adjei,F,KG,'+233241234567,\n"
+    "Kwame Mensah,M,Primary 1,'+233241234568,'+233501111111\n"
+    "Akosua Boateng,F,Primary 2,'+233244567890,\n"
+    "Yaw Asante,M,Primary 4,'+233551234567,\n"
+    "Efua Darko,F,Primary 6,'+233501234567,'+233242222333\n"
 )
+
+SAMPLE_CSV_JHS = (
+    "index_number,full_name,gender,form,parent_phone_1,parent_phone_2\n"
+    ",Kofi Owusu,M,JHS 1,'+233241111222,\n"
+    ",Abena Sarpong,F,JHS 1,'+233242222333,\n"
+    ",Kojo Boateng,M,JHS 2,'+233244567890,\n"
+    "0111025001,Yaw Ofori,M,JHS 3,'+233551234567,\n"
+    "0111025002,Efua Nkrumah,F,JHS 3,'+233501234567,'+233241000001\n"
+)
+
+SAMPLE_CSV_SHS = (
+    "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
+    "0111025101,Ama Serwah,F,Form 1,General Arts,'+233241111222,\n"
+    "0111025102,Kojo Appiah,M,Form 1,General Science,'+233242222333,\n"
+    "0111025103,Esi Kwansah,F,Form 2,Business,'+233503333444,\n"
+    "0111025104,Kwaku Adjei,M,Form 2,Home Economics,'+233244567890,\n"
+    "0111025105,Akua Mensah,F,Form 3,Visual Arts,'+233551234567,'+233501000002\n"
+)
+
+_SAMPLE_BY_KIND = {
+    "primary": ("students_import_primary.csv", SAMPLE_CSV_PRIMARY),
+    "jhs": ("students_import_jhs.csv", SAMPLE_CSV_JHS),
+    "shs": ("students_import_shs.csv", SAMPLE_CSV_SHS),
+}
+
+
+def _csv_cell(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = (row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 @router.get("/import/sample")
-async def download_import_sample(staff=Depends(require_permission("students"))):
+async def download_import_sample(
+    kind: str = Query(..., description="primary, jhs, or shs"),
+    staff=Depends(require_permission("students")),
+):
+    key = (kind or "").strip().lower()
+    sample = _SAMPLE_BY_KIND.get(key)
+    if not sample:
+        raise HTTPException(status_code=400, detail="kind must be one of: primary, jhs, shs")
+    filename, body = sample
     return StreamingResponse(
-        iter([SAMPLE_CSV]),
+        iter([body]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=students_import_sample.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
@@ -72,19 +111,21 @@ async def import_students(
     row_count = 0
     for i, row in enumerate(csv_reader):
         row_count = i + 1
-        normalized_row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        normalized_row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         try:
-            form_name = normalize_form_name(normalized_row.get("form", ""))
+            form_raw = _csv_cell(normalized_row, "form", "class", "level")
+            full_name = _csv_cell(normalized_row, "full_name", "name")
+            form_name = normalize_form_name(form_raw)
             if not form_name:
                 raise ValueError("form is required")
-            if not normalized_row.get("full_name"):
+            if not full_name:
                 raise ValueError("full_name is required")
             idx, strm, gender = validate_student_fields(
                 db,
                 form_name,
-                normalized_row.get("index_number"),
-                normalized_row.get("stream"),
-                normalized_row.get("gender"),
+                _csv_cell(normalized_row, "index_number", "index") or None,
+                _csv_cell(normalized_row, "stream", "programme", "program") or None,
+                _csv_cell(normalized_row, "gender") or None,
             )
             if idx:
                 dup = db.query(Student).filter(Student.index_number == idx).first()
@@ -92,16 +133,25 @@ async def import_students(
                     raise ValueError(f"Duplicate index number {idx}")
             _level = find_class_level(db, form_name)
             _form_track = _level.track if _level else Track.BASIC
+            try:
+                phone_1 = parse_optional_ghana_phone(
+                    _csv_cell(normalized_row, "parent_phone_1", "phone", "phone_1") or None
+                )
+                phone_2 = parse_optional_ghana_phone(
+                    _csv_cell(normalized_row, "parent_phone_2", "phone_2") or None
+                )
+            except PhoneValidationError as e:
+                raise ValueError(str(e)) from e
             student = Student(
                 index_number=idx,
-                full_name=normalized_row["full_name"],
+                full_name=full_name,
                 gender=gender,
                 form=form_name,
                 stream=strm,
                 track=_form_track,
                 academic_year=academic_year.strip(),
-                parent_phone_1=normalized_row.get("parent_phone_1") or None,
-                parent_phone_2=normalized_row.get("parent_phone_2") or None,
+                parent_phone_1=phone_1,
+                parent_phone_2=phone_2,
             )
             db.add(student)
             imported += 1
@@ -130,6 +180,7 @@ async def list_students(
     academic_year: str = None,
     is_active: bool = None,
     track: str = None,
+    graduation: str = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("students")),
 ):
@@ -145,11 +196,27 @@ async def list_students(
         query = query.filter(Student.stream == stream)
     if academic_year:
         query = query.filter(Student.academic_year == academic_year)
-    if is_active is not None:
-        query = query.filter(Student.is_active == is_active)
     if track:
         track_enum = Track.BASIC if str(track).strip().upper() == "BASIC" else Track.SHS
         query = query.filter(Student.track == track_enum)
+
+    graduation_key = (graduation or "").strip().lower()
+    if graduation_key:
+        if graduation_key not in {"jhs", "shs"}:
+            raise HTTPException(status_code=400, detail="graduation must be one of: jhs, shs")
+        if graduation_key == "jhs":
+            query = query.filter(
+                Student.graduated_basic_at.isnot(None),
+                Student.graduated_shs_at.is_(None),
+                Student.is_active == False,
+            ).order_by(Student.graduated_basic_at.desc())
+        else:
+            query = query.filter(Student.graduated_shs_at.isnot(None)).order_by(
+                Student.graduated_shs_at.desc()
+            )
+    elif is_active is not None:
+        query = query.filter(Student.is_active == is_active)
+
     total = query.count()
     students = query.offset((page - 1) * limit).limit(limit).all()
     return {
@@ -205,7 +272,9 @@ async def create_student(
         idx, strm, gender = validate_student_fields(
             db, form_name, data.index_number, data.stream, data.gender
         )
-    except ValueError as e:
+        phone_1 = parse_optional_ghana_phone(data.parent_phone_1)
+        phone_2 = parse_optional_ghana_phone(data.parent_phone_2)
+    except (ValueError, PhoneValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     _level = find_class_level(db, form_name)
@@ -218,8 +287,8 @@ async def create_student(
         stream=strm,
         track=_form_track,
         academic_year=data.academic_year,
-        parent_phone_1=data.parent_phone_1,
-        parent_phone_2=data.parent_phone_2,
+        parent_phone_1=phone_1,
+        parent_phone_2=phone_2,
     )
     db.add(student)
     try:
@@ -255,7 +324,11 @@ async def update_student(
     gender = payload.get("gender", student.gender)
     try:
         idx, strm, g = validate_student_fields(db, form, index_number, stream, gender)
-    except ValueError as e:
+        if "parent_phone_1" in payload:
+            payload["parent_phone_1"] = parse_optional_ghana_phone(payload.get("parent_phone_1"))
+        if "parent_phone_2" in payload:
+            payload["parent_phone_2"] = parse_optional_ghana_phone(payload.get("parent_phone_2"))
+    except (ValueError, PhoneValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     payload["index_number"] = idx
     payload["stream"] = strm
