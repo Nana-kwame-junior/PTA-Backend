@@ -291,7 +291,7 @@ async def send_agenda_sms(
     phones = meeting_recipient_phones(db, audience)
     message = (
         f"PTA Meeting Agenda — {meeting.date.strftime('%Y-%m-%d')} {meeting.time}, {meeting.venue}: "
-        f"{(meeting.agenda or '')[:120]}… Full agenda on the Mawuli PTA app. — SchoolPulse"
+        f"{(meeting.agenda or '')[:120]}… Full agenda on the SchoolPulse app. — SchoolPulse"
     )
     for phone in phones:
         background_tasks.add_task(send_sms_background, phone, message)

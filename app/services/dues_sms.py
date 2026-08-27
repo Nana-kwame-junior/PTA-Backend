@@ -138,10 +138,10 @@ def build_personalized_parent_dues_message(
 
     if reminder_type == "NEW":
         head = (
-            f"Mawuli PTA dues ({dues.term} · {dues.academic_year}). "
+            f"SchoolPulse dues ({dues.term} · {dues.academic_year}). "
             f"You owe GH₵{total:.2f} for your ward(s): {ward_list}. Due {due_str}."
         )
-        return head + " Pay via the Mawuli PTA app or school office."
+        return head + " Pay via the SchoolPulse app or school office."
 
     if reminder_type == "OVERDUE":
         head = (
@@ -155,7 +155,7 @@ def build_personalized_parent_dues_message(
         f"PTA Dues Reminder — due in {days} ({due_str}). "
         f"You owe GH₵{total:.2f} for: {ward_list}."
     )
-    return head + " Pay via the Mawuli PTA app or school office."
+    return head + " Pay via the SchoolPulse app or school office."
 
 
 def build_dues_sms_message(
@@ -214,9 +214,9 @@ def send_dues_sms_for_config(db: Session, dues_config_id: str, reminder_type: st
             total = bucket.total
             due_str = dues.due_date.strftime("%d %b %Y") if dues.due_date else ""
             message = (
-                f"Mawuli PTA: You owe GH₵{total:.2f} for {names} "
+                f"SchoolPulse: You owe GH₵{total:.2f} for {names} "
                 f"({dues.term} · {dues.academic_year}, due {due_str}). "
-                f"See the Mawuli PTA app for breakdown. Pay via app or school office."
+                f"See the SchoolPulse app for breakdown. Pay via app or school office."
             )
 
         try:

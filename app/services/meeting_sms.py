@@ -143,7 +143,7 @@ def _reminder_message(meeting: Meeting, reminder_type: str) -> str:
     label = labels.get(reminder_type, reminder_type)
     return (
         f"PTA Meeting Reminder ({label}): {meeting.title} on {when} at {clock}, "
-        f"{meeting.venue}. See the Mawuli PTA app. — SchoolPulse"
+        f"{meeting.venue}. See the SchoolPulse app. — SchoolPulse"
     )
 
 
