@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
@@ -11,15 +12,19 @@ from app.models.class_level import Track
 from app.services.activity_log import log_staff_activity
 from app.services.promotion import promote_students_for_year, stamp_active_students_academic_year
 
-router = APIRouter(prefix="/admin/academic", tags=["Academic Calendar"])
+router = APIRouter(prefix="/admin/academic", tags=["School Calendar"])
 
 
-def _serialize_year(row: AcademicYear) -> dict:
+def _serialize_year(row: AcademicYear, term_count: int = 0) -> dict:
+    track = str(row.track.value) if hasattr(row.track, "value") else str(row.track) if row.track else None
+    max_periods = 2 if track == "SHS" else 3
     return {
         "id": row.id,
         "label": row.label,
-        "track": str(row.track.value) if hasattr(row.track, 'value') else str(row.track) if row.track else None,
+        "track": track,
         "is_active": row.is_active,
+        "term_count": int(term_count or 0),
+        "max_periods": max_periods,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -93,8 +98,23 @@ async def list_academic_years(
     db: Session = Depends(get_db),
     admin=Depends(require_permission("academic")),
 ):
-    rows = db.query(AcademicYear).order_by(AcademicYear.label.desc()).all()
-    return {"success": True, "data": {"years": [_serialize_year(r) for r in rows]}}
+    rows = (
+        db.query(AcademicYear)
+        .order_by(AcademicYear.label.desc(), AcademicYear.track.asc())
+        .all()
+    )
+    counts = {
+        str(year_id): int(n)
+        for year_id, n in (
+            db.query(AcademicTerm.academic_year_id, func.count(AcademicTerm.id))
+            .group_by(AcademicTerm.academic_year_id)
+            .all()
+        )
+    }
+    return {
+        "success": True,
+        "data": {"years": [_serialize_year(r, counts.get(str(r.id), 0)) for r in rows]},
+    }
 
 
 @router.post("/years/{year_id}/terms")
@@ -201,7 +221,11 @@ async def list_all_terms(
             raise HTTPException(status_code=400, detail="track must be one of: BASIC, SHS")
         track_enum = Track.BASIC if track_str == "BASIC" else Track.SHS
         query = query.filter(AcademicTerm.track == track_enum)
-    rows = query.order_by(AcademicTerm.academic_year.desc(), AcademicTerm.sequence.asc()).all()
+    rows = query.order_by(
+        AcademicTerm.academic_year.desc(),
+        AcademicTerm.track.asc(),
+        AcademicTerm.sequence.asc(),
+    ).all()
     return {"success": True, "data": {"terms": [_serialize_term(r) for r in rows]}}
 
 
