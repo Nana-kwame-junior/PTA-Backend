@@ -3,15 +3,20 @@
 from io import BytesIO
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A5
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
-def _draw_line(c, y: float, width: float, margin: float) -> float:
-    c.setStrokeColor(colors.HexColor("#cbd5e1"))
-    c.line(margin, y, width - margin, y)
-    return y - 14
+TEAL = colors.HexColor("#0F766E")
+TEAL_DARK = colors.HexColor("#115E59")
+INK = colors.HexColor("#1C1917")
+MUTED = colors.HexColor("#78716C")
+BORDER = colors.HexColor("#E7E5E4")
+PANEL = colors.HexColor("#F8FAFC")
+WHITE = colors.white
 
 
 def build_receipt_payload(
@@ -43,32 +48,147 @@ def build_receipt_payload(
     }
 
 
+def _format_amount(amount_ghs: str) -> str:
+    try:
+        value = float(amount_ghs)
+        return f"GHS {value:,.2f}"
+    except (TypeError, ValueError):
+        return f"GHS {amount_ghs}"
+
+
 def generate_receipt(receipt_data: dict) -> BytesIO:
     buffer = BytesIO()
-    width, height = A5
-    margin = 18 * mm
-    c = canvas.Canvas(buffer, pagesize=A5)
+    page_width, page_height = A5
+    margin = 16 * mm
 
-    # Header band
-    c.setFillColor(colors.HexColor("#0d9488"))
-    c.rect(0, height - 42 * mm, width, 42 * mm, fill=1, stroke=0)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margin, height - 18 * mm, "SchoolPulse")
-    c.setFont("Helvetica", 10)
-    c.drawString(margin, height - 26 * mm, "Official PTA Payment Receipt")
-    c.setFont("Helvetica-Bold", 11)
-    c.drawRightString(width - margin, height - 18 * mm, receipt_data["receipt_number"])
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A5,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=f"Receipt {receipt_data['receipt_number']}",
+    )
 
-    y = height - 52 * mm
-    c.setFillColor(colors.HexColor("#0f172a"))
-    c.setFont("Helvetica-Bold", 20)
-    c.drawString(margin, y, f"GH₵ {receipt_data['amount_ghs']}")
-    y -= 10 * mm
-    c.setFont("Helvetica", 9)
-    c.setFillColor(colors.HexColor("#64748b"))
-    c.drawString(margin, y, receipt_data.get("channel", "Payment"))
-    y -= 8 * mm
+    styles = getSampleStyleSheet()
+    brand = ParagraphStyle(
+        "Brand",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=22,
+        textColor=WHITE,
+    )
+    brand_sub = ParagraphStyle(
+        "BrandSub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#D1FAE5"),
+    )
+    receipt_no = ParagraphStyle(
+        "ReceiptNo",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        alignment=TA_RIGHT,
+        textColor=WHITE,
+    )
+    amount = ParagraphStyle(
+        "Amount",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=28,
+        leading=32,
+        textColor=INK,
+    )
+    channel = ParagraphStyle(
+        "Channel",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=MUTED,
+    )
+    label = ParagraphStyle(
+        "Label",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=11,
+        textColor=MUTED,
+        spaceAfter=2,
+    )
+    value = ParagraphStyle(
+        "Value",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=14,
+        textColor=INK,
+    )
+    footer = ParagraphStyle(
+        "Footer",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=12,
+        textColor=MUTED,
+        alignment=TA_CENTER,
+    )
+
+    story = []
+
+    header = Table(
+        [
+            [
+                Paragraph("SchoolPulse", brand),
+                Paragraph(receipt_data["receipt_number"], receipt_no),
+            ],
+            [Paragraph("Official PTA Payment Receipt", brand_sub), ""],
+        ],
+        colWidths=[(page_width - 2 * margin) * 0.62, (page_width - 2 * margin) * 0.38],
+    )
+    header.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), TEAL),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, 0), 14),
+                ("BOTTOMPADDING", (0, -1), (-1, -1), 14),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("SPAN", (0, 1), (0, 1)),
+            ]
+        )
+    )
+    story.append(header)
+    story.append(Spacer(1, 10 * mm))
+
+    amount_box = Table(
+        [
+            [Paragraph(_format_amount(receipt_data["amount_ghs"]), amount)],
+            [Paragraph(receipt_data.get("channel", "Payment"), channel)],
+        ],
+        colWidths=[page_width - 2 * margin],
+    )
+    amount_box.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), PANEL),
+                ("BOX", (0, 0), (-1, -1), 0.6, BORDER),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, 0), 12),
+                ("BOTTOMPADDING", (0, -1), (-1, -1), 12),
+            ]
+        )
+    )
+    story.append(amount_box)
+    story.append(Spacer(1, 8 * mm))
 
     rows = [
         ("Student", receipt_data["student_name"]),
@@ -82,25 +202,46 @@ def generate_receipt(receipt_data: dict) -> BytesIO:
     if receipt_data.get("recorded_by") and receipt_data["recorded_by"] != "—":
         rows.append(("Recorded by", receipt_data["recorded_by"]))
 
-    for label, value in rows:
-        y = _draw_line(c, y, width, margin)
-        c.setFont("Helvetica", 8)
-        c.setFillColor(colors.HexColor("#64748b"))
-        c.drawString(margin, y, label.upper())
-        c.setFont("Helvetica-Bold", 10)
-        c.setFillColor(colors.HexColor("#0f172a"))
-        c.drawString(margin, y - 12, str(value)[:72])
+    detail_rows = []
+    for row_label, row_value in rows:
+        detail_rows.append(
+            [
+                Paragraph(row_label.upper(), label),
+                Paragraph(str(row_value), value),
+            ]
+        )
 
-    y -= 22 * mm
-    c.setFont("Helvetica", 8)
-    c.setFillColor(colors.HexColor("#94a3b8"))
-    c.drawString(
-        margin,
-        16 * mm,
-        "This receipt confirms PTA dues received by the school finance office.",
+    details = Table(
+        detail_rows,
+        colWidths=[(page_width - 2 * margin) * 0.36, (page_width - 2 * margin) * 0.64],
+        repeatRows=0,
     )
-    c.drawString(margin, 10 * mm, "Keep this receipt for your records. — SchoolPulse PTA")
+    detail_style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.4, BORDER),
+        ("BOX", (0, 0), (-1, -1), 0.6, BORDER),
+    ]
+    for i in range(len(detail_rows)):
+        if i % 2 == 0:
+            detail_style.append(("BACKGROUND", (0, i), (-1, i), WHITE))
+        else:
+            detail_style.append(("BACKGROUND", (0, i), (-1, i), PANEL))
+    details.setStyle(TableStyle(detail_style))
+    story.append(details)
+    story.append(Spacer(1, 10 * mm))
 
-    c.save()
+    story.append(
+        Paragraph(
+            "This receipt confirms PTA dues received by the school finance office.<br/>"
+            "Keep this document for your records. &mdash; SchoolPulse PTA",
+            footer,
+        )
+    )
+
+    doc.build(story)
     buffer.seek(0)
     return buffer
