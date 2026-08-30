@@ -30,7 +30,7 @@ from app.services.dues_balance import (
     format_payment_sms,
 )
 from app.models.class_level import Track
-from app.services.pdf import generate_receipt
+from app.services.receipt_pdf import build_receipt_payload, generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse, HTMLResponse
 
@@ -601,13 +601,20 @@ async def download_online_receipt(
             raise HTTPException(status_code=403, detail="Not your payment")
 
     student = db.query(Student).filter(Student.id == payment.student_id).first()
-    receipt_data = {
-        "receipt_number": payment.receipt_number,
-        "student_name": student.full_name if student else "Unknown",
-        "amount_ghs": str(payment.amount_ghs),
-        "date": payment.paid_at.strftime("%Y-%m-%d %H:%M:%S") if payment.paid_at else "",
-        "type": "Online Payment",
-    }
+    dues = db.query(DuesConfig).filter(DuesConfig.id == payment.dues_config_id).first() if payment.dues_config_id else None
+    receipt_data = build_receipt_payload(
+        receipt_number=payment.receipt_number or payment.paystack_reference,
+        student_name=student.full_name if student else "Unknown",
+        student_index=student.index_number if student else None,
+        amount_ghs=str(payment.amount_ghs),
+        payment_date=payment.paid_at.strftime("%d %b %Y %H:%M") if payment.paid_at else "",
+        channel="Online payment (Paystack)",
+        payment_mode="Paystack",
+        term=dues.term if dues else None,
+        academic_year=dues.academic_year if dues else None,
+        recorded_by="Online",
+        reference=payment.paystack_reference,
+    )
     pdf_buffer = generate_receipt(receipt_data)
     return StreamingResponse(
         pdf_buffer,

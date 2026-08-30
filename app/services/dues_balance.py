@@ -13,6 +13,22 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.student import Student
 
 
+def _term_sort_key(term: AcademicTerm) -> tuple[str, int]:
+    return (term.academic_year, term.sequence)
+
+
+def _terms_up_to_current(db: Session, track: Track, current_term: AcademicTerm) -> list[AcademicTerm]:
+    """All academic terms on this track up to and including the current term (cross-year)."""
+    current_key = _term_sort_key(current_term)
+    terms = (
+        db.query(AcademicTerm)
+        .filter(AcademicTerm.track == track)
+        .order_by(AcademicTerm.academic_year.asc(), AcademicTerm.sequence.asc())
+        .all()
+    )
+    return [term for term in terms if _term_sort_key(term) <= current_key]
+
+
 def _online_allocated_for_reference(db: Session, student_id: str, paystack_reference: str) -> Decimal:
     total = (
         db.query(func.coalesce(func.sum(ManualPayment.amount_ghs), 0))
@@ -107,15 +123,7 @@ def student_outstanding_summary(
             "breakdown": [],
         }
 
-    terms = (
-        db.query(AcademicTerm)
-        .filter(
-            AcademicTerm.academic_year == current_term.academic_year,
-            AcademicTerm.sequence <= current_term.sequence,
-        )
-        .order_by(AcademicTerm.sequence.asc())
-        .all()
-    )
+    terms = _terms_up_to_current(db, track, current_term)
 
     breakdown: list[dict] = []
     arrears = Decimal("0")
@@ -135,7 +143,8 @@ def student_outstanding_summary(
             continue
 
         is_current = term.id == current_term.id
-        is_arrear = term.sequence < current_term.sequence and remaining > 0
+        is_arrear = not is_current and remaining > 0
+        is_prior_year_arrear = is_arrear and term.academic_year != current_term.academic_year
         breakdown.append(
             {
                 "academic_year": term.academic_year,
@@ -146,6 +155,7 @@ def student_outstanding_summary(
                 "remaining_ghs": str(remaining),
                 "is_current": is_current,
                 "is_arrear": is_arrear,
+                "is_prior_year_arrear": is_prior_year_arrear,
             }
         )
         total_due += remaining
@@ -202,15 +212,7 @@ def apply_payment_fifo(
     if not current_term:
         return [], Decimal(str(amount))
 
-    terms = (
-        db.query(AcademicTerm)
-        .filter(
-            AcademicTerm.academic_year == current_term.academic_year,
-            AcademicTerm.sequence <= current_term.sequence,
-        )
-        .order_by(AcademicTerm.sequence.asc())
-        .all()
-    )
+    terms = _terms_up_to_current(db, track, current_term)
 
     remaining = Decimal(str(amount))
     created: list[ManualPayment] = []

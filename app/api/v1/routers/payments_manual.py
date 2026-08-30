@@ -19,7 +19,7 @@ from app.models.parent_student_link import ParentStudentLink
 from app.models.parent import Parent
 from app.schemas.payment import ManualPaymentRequest, ManualPaymentUpdate, AmendmentRequest, FlagPaymentRequest
 from app.services.sms import send_sms_background
-from app.services.pdf import generate_receipt
+from app.services.receipt_pdf import build_receipt_payload, generate_receipt
 from app.core.config import settings
 from fastapi.responses import StreamingResponse
 from app.workers.lock_tasks import lock_manual_payment
@@ -340,18 +340,44 @@ async def manual_payment_audit_log(
 async def download_manual_receipt(
     payment_id: UUID,
     db: Session = Depends(get_db),
-    staff=Depends(require_permission("payments.history")),
+    current_user=Depends(get_current_user),
 ):
     payment = db.query(ManualPayment).filter(ManualPayment.id == str(payment_id)).first()
     if not payment:
         raise HTTPException(status_code=404)
-    student = db.query(Student).filter(Student.id == payment.student_id).first()
-    receipt_data = {
-        "receipt_number": payment.receipt_number,
-        "student_name": payment.student_name,
-        "amount_ghs": str(payment.amount_ghs),
-        "date": payment.payment_date.strftime("%Y-%m-%d %H:%M:%S"),
-        "type": "Manual Payment (Cash/Cheque)"
-    }
+    role = current_user.get("role")
+    if role == "PARENT":
+        linked = {str(sid) for sid in (current_user.get("matched_student_ids") or [])}
+        if str(payment.student_id) not in linked:
+            raise HTTPException(status_code=403, detail="Not your ward's payment")
+    elif role == "ADMIN":
+        pass
+    elif role == "FINANCIAL_STAFF":
+        from app.services.permissions import resolve_user_permissions
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+        perms = resolve_user_permissions(user) if user else []
+        if "payments.history" not in perms:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+    else:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    mode = payment.payment_mode.value if payment.payment_mode else "CASH"
+    receipt_data = build_receipt_payload(
+        receipt_number=payment.receipt_number,
+        student_name=payment.student_name,
+        student_index=payment.student_index_no,
+        amount_ghs=str(payment.amount_ghs),
+        payment_date=payment.payment_date.strftime("%d %b %Y %H:%M") if payment.payment_date else "",
+        channel="School payment (manual)",
+        payment_mode=mode.replace("_", " ").title(),
+        term=payment.term,
+        academic_year=payment.academic_year,
+        recorded_by=payment.recorded_by_name,
+        reference=payment.receipt_number,
+    )
     pdf_buffer = generate_receipt(receipt_data)
-    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=receipt_{payment.receipt_number}.pdf"})
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=receipt_{payment.receipt_number}.pdf"},
+    )

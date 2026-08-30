@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import require_parent_match
+from app.models.dues_config import DuesConfig
+from app.services.receipt_pdf import build_receipt_payload, generate_receipt
+from fastapi.responses import StreamingResponse
 from app.models.manual_payment import ManualPayment
 from app.models.payment import Payment
 from app.models.student import Student
@@ -174,3 +177,70 @@ async def parent_payment_history(
             },
         },
     }
+
+
+@router.get("/history/{payment_id}/receipt")
+async def parent_payment_receipt(
+    payment_id: str,
+    channel: str = Query("MANUAL", pattern="^(MANUAL|ONLINE)$"),
+    db: Session = Depends(get_db),
+    parent=Depends(require_parent_match),
+):
+    """Download PDF receipt for a payment linked to this parent's ward."""
+    linked_ids = {str(sid) for sid in (parent.get("matched_student_ids") or [])}
+    parent_id = str(parent.get("id") or "")
+
+    if channel == "ONLINE":
+        payment = db.query(Payment).filter(Payment.id == str(payment_id)).first()
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if str(payment.student_id) not in linked_ids and payment.parent_id != parent_id:
+            raise HTTPException(status_code=403, detail="Not your payment")
+        student = db.query(Student).filter(Student.id == payment.student_id).first()
+        dues = (
+            db.query(DuesConfig).filter(DuesConfig.id == payment.dues_config_id).first()
+            if payment.dues_config_id
+            else None
+        )
+        receipt_data = build_receipt_payload(
+            receipt_number=payment.receipt_number or payment.paystack_reference,
+            student_name=student.full_name if student else "Unknown",
+            student_index=student.index_number if student else None,
+            amount_ghs=str(payment.amount_ghs),
+            payment_date=payment.paid_at.strftime("%d %b %Y %H:%M") if payment.paid_at else "",
+            channel="Online payment (Paystack)",
+            payment_mode="Paystack",
+            term=dues.term if dues else None,
+            academic_year=dues.academic_year if dues else None,
+            recorded_by="Online",
+            reference=payment.paystack_reference,
+        )
+    else:
+        payment = db.query(ManualPayment).filter(ManualPayment.id == str(payment_id)).first()
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if str(payment.student_id) not in linked_ids:
+            raise HTTPException(status_code=403, detail="Not your ward's payment")
+        mode = payment.payment_mode.value if payment.payment_mode else "CASH"
+        receipt_data = build_receipt_payload(
+            receipt_number=payment.receipt_number,
+            student_name=payment.student_name,
+            student_index=payment.student_index_no,
+            amount_ghs=str(payment.amount_ghs),
+            payment_date=payment.payment_date.strftime("%d %b %Y %H:%M") if payment.payment_date else "",
+            channel="School payment (manual)",
+            payment_mode=mode.replace("_", " ").title(),
+            term=payment.term,
+            academic_year=payment.academic_year,
+            recorded_by=payment.recorded_by_name,
+            reference=payment.receipt_number,
+        )
+
+    pdf_buffer = generate_receipt(receipt_data)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=receipt_{receipt_data['receipt_number']}.pdf"
+        },
+    )
