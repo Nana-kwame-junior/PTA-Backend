@@ -15,6 +15,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False)
+    job_title = Column(String(64), nullable=True, default="Other")
     is_active = Column(Boolean, default=True)
     is_first_login = Column(Boolean, default=True)
     permissions = Column(JSON, nullable=True)

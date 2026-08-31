@@ -19,6 +19,7 @@ from app.services.student_validation import validate_student_fields
 from app.models.parent import Parent, MatchStatus
 from app.models.user import User, UserRole
 from app.services.permissions import resolve_user_permissions
+from app.services.staff_job_titles import display_job_title
 from app.models.student import Student
 from app.models.pending_match import PendingMatch
 from app.models.parent_student_link import ParentStudentLink
@@ -397,6 +398,7 @@ async def web_login(req: WebLoginRequest, db: Session = Depends(get_db)):
                 "name": user.name,
                 "email": user.email,
                 "role": user.role.value,
+                "job_title": display_job_title(user),
                 "is_first_login": user.is_first_login,
                 "permissions": resolve_user_permissions(user),
             },
@@ -699,6 +701,7 @@ async def web_me(current_user=Depends(get_current_user), db: Session = Depends(g
             "name": user.name,
             "email": user.email,
             "role": user.role.value,
+            "job_title": display_job_title(user),
             "is_first_login": user.is_first_login,
             "permissions": resolve_user_permissions(user),
         },
@@ -741,6 +744,7 @@ async def update_web_me(
             "name": user.name,
             "email": user.email,
             "role": user.role.value,
+            "job_title": display_job_title(user),
             "is_first_login": user.is_first_login,
             "permissions": resolve_user_permissions(user),
         },

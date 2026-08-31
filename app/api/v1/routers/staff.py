@@ -7,10 +7,17 @@ from app.core.database import get_db
 from app.core.security import require_role, hash_password, verify_password, get_current_user
 from app.models.user import User, UserRole
 from app.models.staff_activity import StaffActivityLog
-from app.schemas.staff import StaffCreate
+from app.schemas.staff import StaffCreate, StaffUpdate
 from app.services.email import send_temporary_password_email
 from app.services.activity_log import log_staff_activity
 from app.services.permissions import sanitize_permissions, resolve_user_permissions, ALL_STAFF_PERMISSIONS
+from app.services.staff_job_titles import (
+    DEFAULT_PERMISSIONS_BY_JOB_TITLE,
+    STAFF_JOB_TITLES,
+    display_job_title,
+    sanitize_job_title,
+    suggested_permissions_for_job_title,
+)
 
 router = APIRouter(prefix="/admin/staff", tags=["Staff Management"])
 
@@ -26,6 +33,7 @@ def _staff_payload(
         "name": user.name,
         "email": user.email,
         "role": user.role.value,
+        "job_title": display_job_title(user),
         "is_active": user.is_active,
         "is_first_login": user.is_first_login,
         "permissions": resolve_user_permissions(user),
@@ -35,6 +43,17 @@ def _staff_payload(
     if temporary_password:
         data["temporary_password"] = temporary_password
     return data
+
+
+@router.get("/job-titles")
+async def list_job_titles(admin=Depends(require_role("ADMIN"))):
+    return {
+        "success": True,
+        "data": {
+            "job_titles": STAFF_JOB_TITLES,
+            "permission_presets": DEFAULT_PERMISSIONS_BY_JOB_TITLE,
+        },
+    }
 
 
 @router.get("/permissions")
@@ -87,14 +106,20 @@ async def create_staff(
     if existing:
         raise HTTPException(status_code=409, detail="Email already exists")
 
+    job_title = sanitize_job_title(req.job_title)
+    if req.permissions is None:
+        perms = sanitize_permissions(suggested_permissions_for_job_title(job_title))
+    else:
+        perms = sanitize_permissions(req.permissions)
+
     temp_password = secrets.token_urlsafe(12)
-    perms = sanitize_permissions(getattr(req, "permissions", None))
 
     new_staff = User(
         name=req.name,
         email=req.email,
         hashed_password=hash_password(temp_password),
         role=UserRole(req.role),
+        job_title=job_title,
         is_active=True,
         is_first_login=True,
         permissions=perms,
@@ -109,7 +134,7 @@ async def create_staff(
         admin,
         page_label="Staff & Roles",
         action_label=f"Created staff account for {new_staff.name}",
-        details=new_staff.email,
+        details=f"{new_staff.email} · {job_title}",
     )
 
     return {
@@ -134,7 +159,7 @@ async def list_staff(
 @router.patch("/{staff_id}")
 async def update_staff(
     staff_id: UUID,
-    req: dict,
+    req: StaffUpdate,
     db: Session = Depends(get_db),
     admin=Depends(require_role("ADMIN")),
 ):
@@ -143,21 +168,24 @@ async def update_staff(
         raise HTTPException(status_code=404)
     if staff.role == UserRole.ADMIN:
         raise HTTPException(status_code=400, detail="Cannot modify admin account here")
-    if "name" in req:
-        staff.name = req["name"]
-    if "email" in req:
-        existing = db.query(User).filter(User.email == req["email"], User.id != str(staff_id)).first()
+    if req.name is not None:
+        staff.name = req.name
+    if req.email is not None:
+        existing = db.query(User).filter(User.email == req.email, User.id != str(staff_id)).first()
         if existing:
             raise HTTPException(status_code=409, detail="Email already used")
-        staff.email = req["email"]
-    if "permissions" in req:
-        staff.permissions = sanitize_permissions(req["permissions"])
+        staff.email = req.email
+    if req.job_title is not None:
+        staff.job_title = sanitize_job_title(req.job_title)
+    if req.permissions is not None:
+        staff.permissions = sanitize_permissions(req.permissions)
     db.commit()
     log_staff_activity(
         db,
         admin,
         page_label="Staff & Roles",
         action_label=f"Updated access for {staff.name}",
+        details=display_job_title(staff),
     )
     return {"success": True, "data": _staff_payload(staff)}
 
