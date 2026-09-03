@@ -150,6 +150,8 @@ def _linked_students(db: Session, parent_id: str):
                     "gender": student.gender,
                     "form": student.form,
                     "stream": student.stream,
+                    "status": getattr(link, "status", "ACTIVE") or "ACTIVE",
+                    "unlink_pending": (getattr(link, "status", "ACTIVE") or "ACTIVE") == "PENDING_UNLINK",
                 }
             )
     return students
@@ -660,24 +662,43 @@ async def parent_unlink_ward(
     if not link:
         raise HTTPException(status_code=404, detail="Ward link not found")
 
-    db.delete(link)
-    db.commit()
+    student = db.query(Student).filter(Student.id == student_id_str).first()
+    ward_name = student.full_name if student else "Unknown Student"
+    ward_form = student.form if student else "N/A"
 
-    remaining_links = (
-        db.query(ParentStudentLink)
-        .filter(ParentStudentLink.parent_id == parent.id)
-        .all()
+    # Mark link as pending unlink
+    link.status = "PENDING_UNLINK"
+
+    # Check if a pending unlink record already exists
+    existing_pending = (
+        db.query(PendingMatch)
+        .filter(
+            PendingMatch.parent_id == parent.id,
+            PendingMatch.student_id == student_id_str,
+            PendingMatch.request_type == "UNLINK",
+            PendingMatch.status == "PENDING",
+        )
+        .first()
     )
-    if not remaining_links:
-        parent.match_status = MatchStatus.PENDING
-        db.commit()
+    if not existing_pending:
+        new_pending = PendingMatch(
+            parent_id=parent.id,
+            entered_ward_name=ward_name,
+            entered_ward_form=ward_form,
+            request_type="UNLINK",
+            student_id=student_id_str,
+            status="PENDING",
+        )
+        db.add(new_pending)
+
+    db.commit()
 
     db.refresh(parent)
     access_token, refresh_token, _ = _parent_tokens(db, parent)
     return {
         "success": True,
         "data": {
-            "message": "Ward unlinked successfully.",
+            "message": "Unlink request submitted. An admin will review and approve your request shortly.",
             "access_token": access_token,
             "refresh_token": refresh_token,
             "parent": _serialize_parent(db, parent),

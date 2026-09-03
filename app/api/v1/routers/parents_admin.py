@@ -46,13 +46,23 @@ def _linked_students(db: Session, parent_id: str) -> list[dict]:
 
 def _serialize_pending(db: Session, row: PendingMatch) -> dict:
     parent = db.query(Parent).filter(Parent.id == row.parent_id).first()
+    request_type = getattr(row, "request_type", "MATCH") or "MATCH"
+    target_student_id = getattr(row, "student_id", None)
+    target_student_name = row.entered_ward_name
+    if target_student_id:
+        st = db.query(Student).filter(Student.id == target_student_id).first()
+        if st:
+            target_student_name = st.full_name
+
     return {
         "pending_id": str(row.id),
         "parent_id": str(row.parent_id),
         "parent_name": (parent.full_name if parent else "") or "",
         "phone": parent.phone if parent else "",
         "relationship": parent.relationship if parent else "",
-        "entered_ward_name": row.entered_ward_name,
+        "request_type": request_type,
+        "student_id": target_student_id,
+        "entered_ward_name": target_student_name or row.entered_ward_name,
         "entered_ward_form": row.entered_ward_form,
         "entered_index_number": row.entered_index_number,
         "registered_at": row.registered_at.isoformat() if row.registered_at else None,
@@ -134,7 +144,61 @@ async def approve_pending_match(
 ):
     pending = db.query(PendingMatch).filter(PendingMatch.id == str(pending_id)).first()
     if not pending:
-        raise HTTPException(status_code=404)
+        raise HTTPException(status_code=404, detail="Pending record not found")
+
+    parent = db.query(Parent).filter(Parent.id == pending.parent_id).first()
+    request_type = getattr(pending, "request_type", "MATCH") or "MATCH"
+
+    if request_type == "UNLINK":
+        student_id_target = getattr(pending, "student_id", None) or req.get("student_id")
+        if not student_id_target:
+            raise HTTPException(status_code=400, detail="Target student ID missing")
+
+        student = db.query(Student).filter(Student.id == student_id_target).first()
+        student_name = student.full_name if student else pending.entered_ward_name or "ward"
+
+        link = (
+            db.query(ParentStudentLink)
+            .filter(
+                ParentStudentLink.parent_id == pending.parent_id,
+                ParentStudentLink.student_id == str(student_id_target),
+            )
+            .first()
+        )
+        if link:
+            db.delete(link)
+
+        pending.status = "APPROVED"
+
+        # Check remaining links
+        remaining = (
+            db.query(ParentStudentLink)
+            .filter(ParentStudentLink.parent_id == pending.parent_id)
+            .all()
+        )
+        if not remaining and parent:
+            parent.match_status = MatchStatus.PENDING
+
+        db.commit()
+
+        if parent and parent.phone:
+            message = (
+                f"Your request to unlink ward '{student_name}' has been approved by the admin. —SchoolPulse"
+            )
+            background_tasks.add_task(send_sms_background, parent.phone, message)
+            db.add(
+                SmsLog(
+                    message_type="UNLINK_APPROVED",
+                    recipient_phone=parent.phone,
+                    content=message,
+                    status="QUEUED",
+                )
+            )
+            db.commit()
+
+        return {"success": True, "data": {"message": "Unlink request approved"}}
+
+    # Standard Match approval
     student = db.query(Student).filter(Student.id == req.get("student_id")).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -142,11 +206,11 @@ async def approve_pending_match(
     link = ParentStudentLink(
         parent_id=pending.parent_id,
         student_id=student.id,
-        relationship=db.query(Parent).filter(Parent.id == pending.parent_id).first().relationship,
+        relationship=parent.relationship if parent else None,
         confidence_score=100,
+        status="ACTIVE",
     )
     db.add(link)
-    parent = db.query(Parent).filter(Parent.id == pending.parent_id).first()
     if parent:
         parent.match_status = MatchStatus.MATCHED
     pending.status = "APPROVED"
@@ -154,7 +218,7 @@ async def approve_pending_match(
 
     if parent and parent.phone:
         message = (
-            "YourSchoolPulse account has been verified. "
+            "Your SchoolPulse account has been verified. "
             "You can now log in to view your ward's details. —SchoolPulse"
         )
         background_tasks.add_task(send_sms_background, parent.phone, message)
@@ -181,13 +245,54 @@ async def reject_pending_match(
 ):
     pending = db.query(PendingMatch).filter(PendingMatch.id == str(pending_id)).first()
     if not pending:
-        raise HTTPException(status_code=404)
+        raise HTTPException(status_code=404, detail="Pending record not found")
+
     parent = db.query(Parent).filter(Parent.id == pending.parent_id).first()
+    request_type = getattr(pending, "request_type", "MATCH") or "MATCH"
+    reason = req.get("reason", "No reason provided")
+
+    if request_type == "UNLINK":
+        student_id_target = getattr(pending, "student_id", None) or req.get("student_id")
+        student = db.query(Student).filter(Student.id == student_id_target).first() if student_id_target else None
+        student_name = student.full_name if student else pending.entered_ward_name or "ward"
+
+        if student_id_target:
+            link = (
+                db.query(ParentStudentLink)
+                .filter(
+                    ParentStudentLink.parent_id == pending.parent_id,
+                    ParentStudentLink.student_id == str(student_id_target),
+                )
+                .first()
+            )
+            if link:
+                link.status = "ACTIVE"
+
+        pending.status = "REJECTED"
+        db.commit()
+
+        if parent and parent.phone:
+            message = (
+                f"Your request to unlink ward '{student_name}' was reviewed: {reason}. "
+                "The ward link remains active. —SchoolPulse"
+            )
+            background_tasks.add_task(send_sms_background, parent.phone, message)
+            db.add(
+                SmsLog(
+                    message_type="UNLINK_REJECTED",
+                    recipient_phone=parent.phone,
+                    content=message,
+                    status="QUEUED",
+                )
+            )
+            db.commit()
+
+        return {"success": True, "data": {"message": "Unlink request rejected"}}
+
     pending.status = "REJECTED"
     db.commit()
 
     if parent and parent.phone:
-        reason = req.get("reason", "No reason provided")
         message = (
             f"Your parent account could not be verified: {reason}. "
             "Please contact the school for assistance. —SchoolPulse"

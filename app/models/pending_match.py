@@ -11,5 +11,7 @@ class PendingMatch(Base):
     entered_ward_form = Column(String(50))
     entered_index_number = Column(String(50), nullable=True)
     top_candidates = Column(Text)  # JSON string of candidates
+    request_type = Column(String(20), default="MATCH")  # MATCH, UNLINK
+    student_id = Column(String(36), nullable=True)
     registered_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(20), default="PENDING")  # PENDING, APPROVED, REJECTED

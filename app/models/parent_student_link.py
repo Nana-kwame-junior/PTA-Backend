@@ -10,4 +10,5 @@ class ParentStudentLink(Base):
     student_id = Column(String(36), nullable=False)
     relationship = Column(String(50))
     confidence_score = Column(Integer)
+    status = Column(String(20), default="ACTIVE")  # ACTIVE, PENDING_UNLINK
     created_at = Column(DateTime, default=datetime.utcnow)
