@@ -202,12 +202,13 @@ def student_outstanding_summary(
         .first()
     )
 
-    # Calculate late fee for current term if applicable
+    # Calculate late fee for current term if student has an unpaid balance past grace period
     late_fee = Decimal("0")
     late_fee_applied = False
-    if current_dues and _is_late_fee_applicable(current_dues, now):
-        late_fee = Decimal(str(current_dues.late_fee_ghs))
-        late_fee_applied = True
+    if current_dues and total_due > 0 and _is_late_fee_applicable(current_dues, now):
+        late_fee = Decimal(str(current_dues.late_fee_ghs or 0))
+        if late_fee > 0:
+            late_fee_applied = True
 
     # Add late fee to total due
     total_due_with_penalty = total_due + late_fee
