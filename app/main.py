@@ -33,6 +33,7 @@ def _startup_verify_db() -> None:
                 conn.execute(text("ALTER TABLE pending_matches ADD COLUMN IF NOT EXISTS request_type VARCHAR(20) DEFAULT 'MATCH';"))
                 conn.execute(text("ALTER TABLE pending_matches ADD COLUMN IF NOT EXISTS student_id VARCHAR(36);"))
                 conn.execute(text("ALTER TABLE parent_student_links ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ACTIVE';"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32);"))
             except Exception as mig_exc:
                 logger.warning("Auto-migration notice (ignoring if dialect unsupported): %s", mig_exc)
         logger.info("Database connection and schema verified on startup")

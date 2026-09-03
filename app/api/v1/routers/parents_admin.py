@@ -272,17 +272,19 @@ async def reject_pending_match(
         student = db.query(Student).filter(Student.id == student_id_target).first() if student_id_target else None
         student_name = student.full_name if student else pending.entered_ward_name or "ward"
 
-        if student_id_target:
-            link = (
-                db.query(ParentStudentLink)
-                .filter(
-                    ParentStudentLink.parent_id == pending.parent_id,
-                    ParentStudentLink.student_id == str(student_id_target),
+        links_to_update = (
+            db.query(ParentStudentLink)
+            .filter(
+                ParentStudentLink.parent_id == pending.parent_id,
+                or_(
+                    ParentStudentLink.status == "PENDING_UNLINK",
+                    ParentStudentLink.student_id == str(student_id_target) if student_id_target else False,
                 )
-                .first()
             )
-            if link:
-                link.status = "UNLINK_REJECTED"
+            .all()
+        )
+        for link in links_to_update:
+            link.status = "UNLINK_REJECTED"
 
         pending.status = "REJECTED"
         db.commit()

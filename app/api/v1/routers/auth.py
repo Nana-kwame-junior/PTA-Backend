@@ -175,6 +175,27 @@ def _parent_tokens(db: Session, parent: Parent):
     return access_token, refresh_token, matched_ids
 
 
+def _get_support_contacts(db: Session) -> list[dict]:
+    staff_users = db.query(User).filter(User.is_active == True).order_by(User.created_at.asc()).limit(2).all()
+    support_contacts = []
+    for s in staff_users:
+        phone_no = getattr(s, "phone", None) or "+233 50 123 4567"
+        job = s.job_title if s.job_title and s.job_title != "Other" else "Teacher"
+        support_contacts.append(
+            {
+                "name": f"{s.name} ({job})",
+                "phone": phone_no,
+                "role": job,
+            }
+        )
+    if not support_contacts:
+        support_contacts = [
+            {"name": "School Administration", "phone": "+233 50 123 4567", "role": "Headteacher"},
+            {"name": "PTA Secretariat", "phone": "+233 24 987 6543", "role": "PTA Secretary"},
+        ]
+    return support_contacts
+
+
 def _serialize_parent(db: Session, parent: Parent) -> dict:
     return {
         "id": parent.id,
@@ -182,6 +203,7 @@ def _serialize_parent(db: Session, parent: Parent) -> dict:
         "phone": parent.phone,
         "match_status": parent.match_status.value,
         "linked_students": _linked_students(db, parent.id),
+        "support_contacts": _get_support_contacts(db),
     }
 
 
