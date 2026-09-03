@@ -1,9 +1,14 @@
 """Calculate student PTA dues balance for SMS and reporting."""
 
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
+from zoneinfo import ZoneInfo
+
+ACCRA = ZoneInfo("Africa/Accra")
 
 from app.models.academic import AcademicTerm
 from app.models.class_level import Track
@@ -101,6 +106,26 @@ def get_current_academic_term(db: Session, track: Track) -> AcademicTerm | None:
     return db.query(AcademicTerm).filter(AcademicTerm.is_current == True, AcademicTerm.track == track).first()
 
 
+def _is_late_fee_applicable(dues: DuesConfig, current_time: datetime | None = None) -> bool:
+    """Check if late fee should be applied based on due_date and grace_period."""
+    if not dues or not dues.due_date or dues.late_fee_ghs is None or dues.late_fee_ghs <= 0:
+        return False
+
+    now = current_time or datetime.now(ACCRA)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=ACCRA)
+
+    due_date = dues.due_date
+    if due_date.tzinfo is None:
+        due_date = due_date.replace(tzinfo=ACCRA)
+
+    # Grace period end date
+    grace_days = int(dues.grace_period_days or 0)
+    grace_end = due_date + timedelta(days=grace_days)
+
+    return now > grace_end
+
+
 def student_outstanding_summary(
     db: Session,
     *,
@@ -109,6 +134,7 @@ def student_outstanding_summary(
     current_term: AcademicTerm | None = None,
 ) -> dict:
     """Outstanding dues for a student: current term + unpaid prior terms in the same year."""
+    now = datetime.now(ACCRA)
     current_term = current_term or get_current_academic_term(db, track)
     if not current_term:
         return {
@@ -119,6 +145,8 @@ def student_outstanding_summary(
             "due_date": None,
             "current_term_amount_ghs": "0",
             "arrears_ghs": "0",
+            "late_fee_ghs": "0",
+            "late_fee_applied": False,
             "total_due_ghs": "0",
             "breakdown": [],
         }
@@ -174,15 +202,28 @@ def student_outstanding_summary(
         .first()
     )
 
+    # Calculate late fee for current term if applicable
+    late_fee = Decimal("0")
+    late_fee_applied = False
+    if current_dues and _is_late_fee_applicable(current_dues, now):
+        late_fee = Decimal(str(current_dues.late_fee_ghs))
+        late_fee_applied = True
+
+    # Add late fee to total due
+    total_due_with_penalty = total_due + late_fee
+
     return {
         "student_id": student_id,
         "current_term": current_term.name,
         "academic_year": current_term.academic_year,
         "dues_config_id": str(current_dues.id) if current_dues else None,
         "due_date": current_dues.due_date.isoformat() if current_dues and current_dues.due_date else None,
+        "grace_period_days": current_dues.grace_period_days if current_dues else None,
         "current_term_amount_ghs": str(current_amount),
         "arrears_ghs": str(arrears),
-        "total_due_ghs": str(total_due),
+        "late_fee_ghs": str(late_fee),
+        "late_fee_applied": late_fee_applied,
+        "total_due_ghs": str(total_due_with_penalty),
         "breakdown": breakdown,
     }
 
