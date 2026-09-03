@@ -37,6 +37,7 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     ResetPasswordTokenRequest,
     StaffProfileUpdate,
+    UnlinkWardRequest,
 )
 import random
 import json
@@ -633,6 +634,55 @@ async def confirm_ward_link(
         raise HTTPException(status_code=404, detail="Parent not found")
     data = _link_parent_to_student(db, parent, str(req.student_id))
     return {"success": True, "data": data}
+
+
+@router.post("/parent/unlink-ward")
+async def parent_unlink_ward(
+    req: UnlinkWardRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user["role"] != "PARENT":
+        raise HTTPException(status_code=403, detail="Only parents can access")
+    parent = db.query(Parent).filter(Parent.id == current_user["id"]).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent not found")
+
+    student_id_str = str(req.student_id)
+    link = (
+        db.query(ParentStudentLink)
+        .filter(
+            ParentStudentLink.parent_id == parent.id,
+            ParentStudentLink.student_id == student_id_str,
+        )
+        .first()
+    )
+    if not link:
+        raise HTTPException(status_code=404, detail="Ward link not found")
+
+    db.delete(link)
+    db.commit()
+
+    remaining_links = (
+        db.query(ParentStudentLink)
+        .filter(ParentStudentLink.parent_id == parent.id)
+        .all()
+    )
+    if not remaining_links:
+        parent.match_status = MatchStatus.PENDING
+        db.commit()
+
+    db.refresh(parent)
+    access_token, refresh_token, _ = _parent_tokens(db, parent)
+    return {
+        "success": True,
+        "data": {
+            "message": "Ward unlinked successfully.",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "parent": _serialize_parent(db, parent),
+        },
+    }
 
 
 @router.get("/parent/me")

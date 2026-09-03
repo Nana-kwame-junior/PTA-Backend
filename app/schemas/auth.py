@@ -137,3 +137,9 @@ class StaffProfileUpdate(BaseModel):
 
     email: Optional[EmailStr] = None
 
+
+class UnlinkWardRequest(BaseModel):
+
+    student_id: UUID
+
+

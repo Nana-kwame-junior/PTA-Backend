@@ -35,11 +35,11 @@ def _startup_verify_db() -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=list({
         origin.strip()
-        for origin in settings.cors_origins.split(",")
+        for origin in (*settings.cors_origins.split(","), settings.dashboard_url)
         if origin.strip()
-    ],
+    }),
     allow_credentials=settings.cors_allow_credentials,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Paystack-Signature", "X-PTA-Webhook-Secret"],
