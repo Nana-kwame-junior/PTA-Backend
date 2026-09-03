@@ -11,6 +11,7 @@ from app.core.security import require_permission, require_parent_match
 from app.models.dues_config import DuesConfig
 from app.models.academic import AcademicTerm
 from app.models.student import Student
+from app.models.parent_student_link import ParentStudentLink
 from app.schemas.dues import DuesConfigCreate, DuesConfigUpdate
 from app.services.activity_log import log_staff_activity
 from app.workers.sms_tasks import send_dues_reminder
@@ -167,8 +168,20 @@ async def get_parent_outstanding(
     db: Session = Depends(get_db),
     parent=Depends(require_parent_match),
 ):
+    parent_id = str(parent.get("id") or "")
     wards = []
     for student_id in parent.get("matched_student_ids", []):
+        link = (
+            db.query(ParentStudentLink)
+            .filter(
+                ParentStudentLink.parent_id == parent_id,
+                ParentStudentLink.student_id == str(student_id),
+            )
+            .first()
+        )
+        if link and getattr(link, "status", "ACTIVE") == "PENDING_UNLINK":
+            continue
+
         student = db.query(Student).filter(Student.id == student_id, Student.is_active == True).first()
         if not student:
             continue
