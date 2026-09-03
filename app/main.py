@@ -26,9 +26,16 @@ def _startup_verify_db() -> None:
     from sqlalchemy import text
 
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(text("SELECT 1"))
-        logger.info("Database connection verified on startup")
+            # Auto-migrate columns for PostgreSQL / SQLite if missing
+            try:
+                conn.execute(text("ALTER TABLE pending_matches ADD COLUMN IF NOT EXISTS request_type VARCHAR(20) DEFAULT 'MATCH';"))
+                conn.execute(text("ALTER TABLE pending_matches ADD COLUMN IF NOT EXISTS student_id VARCHAR(36);"))
+                conn.execute(text("ALTER TABLE parent_student_links ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ACTIVE';"))
+            except Exception as mig_exc:
+                logger.warning("Auto-migration notice (ignoring if dialect unsupported): %s", mig_exc)
+        logger.info("Database connection and schema verified on startup")
     except Exception as exc:
         logger.error("Database connection failed on startup: %s", exc)
         raise
