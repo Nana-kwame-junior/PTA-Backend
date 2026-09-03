@@ -32,6 +32,7 @@ def _linked_students(db: Session, parent_id: str) -> list[dict]:
     for link in links:
         student = db.query(Student).filter(Student.id == link.student_id).first()
         if student:
+            link_status = getattr(link, "status", "ACTIVE") or "ACTIVE"
             students.append(
                 {
                     "id": str(student.id),
@@ -39,6 +40,8 @@ def _linked_students(db: Session, parent_id: str) -> list[dict]:
                     "index_number": student.index_number,
                     "form": student.form,
                     "stream": student.stream,
+                    "status": link_status,
+                    "unlink_pending": link_status == "PENDING_UNLINK",
                 }
             )
     return students
@@ -103,6 +106,15 @@ async def list_parents_overview(
     parents = []
     for parent in parent_rows:
         linked = _linked_students(db, parent.id)
+        pending_unlink = (
+            db.query(PendingMatch)
+            .filter(
+                PendingMatch.parent_id == parent.id,
+                PendingMatch.request_type == "UNLINK",
+                PendingMatch.status == "PENDING",
+            )
+            .first()
+        )
         parents.append(
             {
                 "id": str(parent.id),
@@ -113,6 +125,9 @@ async def list_parents_overview(
                 "registered_at": parent.created_at.isoformat() if parent.created_at else None,
                 "linked_students": linked,
                 "link_count": len(linked),
+                "pending_unlink_id": str(pending_unlink.id) if pending_unlink else None,
+                "pending_unlink_student_id": pending_unlink.student_id if pending_unlink else None,
+                "pending_unlink_student_name": pending_unlink.entered_ward_name if pending_unlink else None,
             }
         )
 
