@@ -33,19 +33,26 @@ def _startup_verify_db() -> None:
         logger.error("Database connection failed on startup: %s", exc)
         raise
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=list({
-        origin.strip()
-        for origin in (*settings.cors_origins.split(","), settings.dashboard_url)
-        if origin.strip()
-    }),
-    allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Paystack-Signature", "X-PTA-Webhook-Secret"],
-)
+# Security and rate limit middlewares
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
+
+# CORS middleware added LAST so it executes FIRST on all incoming requests
+raw_origins = [
+    o.strip()
+    for o in (*settings.cors_origins.split(","), settings.dashboard_url)
+    if o.strip()
+]
+has_wildcard = "*" in raw_origins or any("*" in o for o in raw_origins)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[] if has_wildcard else raw_origins,
+    allow_origin_regex=r".*" if has_wildcard else None,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
