@@ -42,6 +42,7 @@ def _linked_students(db: Session, parent_id: str) -> list[dict]:
                     "stream": student.stream,
                     "status": link_status,
                     "unlink_pending": link_status == "PENDING_UNLINK",
+                    "unlink_rejected": link_status == "UNLINK_REJECTED",
                 }
             )
     return students
@@ -281,7 +282,7 @@ async def reject_pending_match(
                 .first()
             )
             if link:
-                link.status = "ACTIVE"
+                link.status = "UNLINK_REJECTED"
 
         pending.status = "REJECTED"
         db.commit()

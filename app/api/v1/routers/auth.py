@@ -136,12 +136,13 @@ def _serialize_candidates(matches):
     ]
 
 
-def _linked_students(db: Session, parent_id: str):
+def _linked_students(db: Session, parent_id: str) -> list[dict]:
     links = db.query(ParentStudentLink).filter(ParentStudentLink.parent_id == parent_id).all()
     students = []
     for link in links:
         student = db.query(Student).filter(Student.id == link.student_id).first()
         if student:
+            link_status = getattr(link, "status", "ACTIVE") or "ACTIVE"
             students.append(
                 {
                     "id": student.id,
@@ -150,8 +151,9 @@ def _linked_students(db: Session, parent_id: str):
                     "gender": student.gender,
                     "form": student.form,
                     "stream": student.stream,
-                    "status": getattr(link, "status", "ACTIVE") or "ACTIVE",
-                    "unlink_pending": (getattr(link, "status", "ACTIVE") or "ACTIVE") == "PENDING_UNLINK",
+                    "status": link_status,
+                    "unlink_pending": link_status == "PENDING_UNLINK",
+                    "unlink_rejected": link_status == "UNLINK_REJECTED",
                 }
             )
     return students
