@@ -24,6 +24,8 @@ from app.models.student import Student
 from app.models.pending_match import PendingMatch
 from app.models.parent_student_link import ParentStudentLink
 from app.models.class_level import ClassLevel
+from app.services.class_level_names import display_class_level_name
+from app.services.school_options import GENDERS, SHS_PROGRAMMES
 from app.schemas.auth import (
     WebLoginRequest,
     OtpRequest,
@@ -78,11 +80,14 @@ async def parent_registration_class_levels(db: Session = Depends(get_db)):
             "levels": [
                 {
                     "name": row.name,
+                    "display_name": display_class_level_name(row.name),
                     "requires_index_number": row.requires_index_number,
                     "requires_stream": row.requires_stream,
                 }
                 for row in rows
-            ]
+            ],
+            "genders": GENDERS,
+            "programmes": SHS_PROGRAMMES,
         },
     }
 

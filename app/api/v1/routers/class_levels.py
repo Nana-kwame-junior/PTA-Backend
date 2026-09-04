@@ -8,8 +8,11 @@ from app.core.security import require_permission
 from app.models.class_level import ClassLevel
 from app.services.class_level_names import (
     assert_secondary_naming_allowed,
+    display_class_level_name,
+    infer_track_from_name,
     normalize_class_level_name,
 )
+from app.services.school_options import GENDERS, SHS_PROGRAMMES
 
 router = APIRouter(prefix="/admin/class-levels", tags=["Class Levels"])
 
@@ -18,7 +21,9 @@ def _serialize(row: ClassLevel) -> dict:
     return {
         "id": row.id,
         "name": row.name,
+        "display_name": display_class_level_name(row.name),
         "sequence": row.sequence,
+        "track": row.track.value if hasattr(row.track, "value") else str(row.track),
         "is_terminal": row.is_terminal,
         "requires_index_number": row.requires_index_number,
         "requires_stream": row.requires_stream,
@@ -51,7 +56,14 @@ async def list_class_levels(
         .order_by(ClassLevel.sequence.asc())
         .all()
     )
-    return {"success": True, "data": {"levels": [_serialize(r) for r in rows]}}
+    return {
+        "success": True,
+        "data": {
+            "levels": [_serialize(r) for r in rows],
+            "genders": GENDERS,
+            "programmes": SHS_PROGRAMMES,
+        },
+    }
 
 
 @router.post("")
@@ -74,6 +86,7 @@ async def create_class_level(
     row = ClassLevel(
         name=name,
         sequence=int(sequence),
+        track=infer_track_from_name(name),
         is_terminal=bool(body.get("is_terminal", False)),
         requires_index_number=bool(body.get("requires_index_number", False)),
         requires_stream=bool(body.get("requires_stream", False)),
@@ -106,6 +119,7 @@ async def update_class_level(
         if exists:
             raise HTTPException(status_code=409, detail="Level name already exists")
         row.name = name
+        row.track = infer_track_from_name(name)
 
     if "sequence" in body:
         seq = int(body["sequence"])

@@ -7,14 +7,14 @@ from datetime import datetime
 
 class Track(str, enum.Enum):
     BASIC = "BASIC"  # KG, Primary 1–6, JHS 1–3
-    SHS = "SHS"      # Form 1–3
+    SHS = "SHS"      # SHS 1–3
 
 
 class ClassLevel(Base):
     """
     PTA class levels split across two tracks.
     Track=BASIC — KG through JHS 3. JHS 3 is the unconditional terminal.
-    Track=SHS   — Form 1–3. Form 3 is the unconditional terminal.
+    Track=SHS   — SHS 1–3. SHS 3 is the unconditional terminal.
     """
 
     __tablename__ = "class_levels"

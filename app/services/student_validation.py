@@ -68,6 +68,8 @@ def validate_student_fields(
         raise ValueError("If provided, index number must be exactly 10 digits (e.g. 0111025007)")
 
     strm = (stream or "").strip() or None
+    if strm and len(strm) > 25:
+        raise ValueError("Programme must be at most 25 characters")
     if stream_required:
         if not strm:
             raise ValueError(

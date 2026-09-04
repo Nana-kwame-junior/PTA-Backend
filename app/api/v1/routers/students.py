@@ -39,7 +39,7 @@ def _serialize_student(student: Student) -> dict:
 # Columns differ by stage. Import uses DictReader so unused columns can be omitted.
 SAMPLE_CSV_PRIMARY = (
     "full_name,gender,form,parent_phone_1,parent_phone_2\n"
-    "Ama Adjei,F,KG,'+233241234567,\n"
+    "Ama Adjei,F,KG 1,'+233241234567,\n"
     "Kwame Mensah,M,Primary 1,'+233241234568,'+233501111111\n"
     "Akosua Boateng,F,Primary 2,'+233244567890,\n"
     "Yaw Asante,M,Primary 4,'+233551234567,\n"
@@ -57,11 +57,11 @@ SAMPLE_CSV_JHS = (
 
 SAMPLE_CSV_SHS = (
     "index_number,full_name,gender,form,stream,parent_phone_1,parent_phone_2\n"
-    "0111025101,Ama Serwah,F,Form 1,General Arts,'+233241111222,\n"
-    "0111025102,Kojo Appiah,M,Form 1,General Science,'+233242222333,\n"
-    "0111025103,Esi Kwansah,F,Form 2,Business,'+233503333444,\n"
-    "0111025104,Kwaku Adjei,M,Form 2,Home Economics,'+233244567890,\n"
-    "0111025105,Akua Mensah,F,Form 3,Visual Arts,'+233551234567,'+233501000002\n"
+    "0111025101,Ama Serwah,F,SHS 1,General Arts,'+233241111222,\n"
+    "0111025102,Kojo Appiah,M,SHS 1,General Science,'+233242222333,\n"
+    "0111025103,Esi Kwansah,F,SHS 2,Business,'+233503333444,\n"
+    "0111025104,Kwaku Adjei,M,SHS 2,Home Economics,'+233244567890,\n"
+    "0111025105,Akua Mensah,F,SHS 3,Visual Arts,'+233551234567,'+233501000002\n"
 )
 
 _SAMPLE_BY_KIND = {
@@ -399,8 +399,9 @@ async def enroll_student_in_shs(
     level = db.query(ClassLevel).filter(ClassLevel.id == str(data.class_level_id)).first()
     if not level:
         raise HTTPException(status_code=400, detail="class_level_id not found")
-    if level.track != Track.SHS or level.name.strip() != "Form 1":
-        raise HTTPException(status_code=400, detail="SHS enrollment must target the Form 1 (SHS track) class level")
+    entry_name = (level.name or "").strip()
+    if level.track != Track.SHS or entry_name not in ("SHS 1", "Form 1"):
+        raise HTTPException(status_code=400, detail="SHS enrollment must target the SHS 1 class level")
 
     if level.requires_stream:
         stream_val = (data.stream or "").strip() or None
@@ -410,7 +411,7 @@ async def enroll_student_in_shs(
         stream_val = None
 
     student.is_active = True
-    student.form = "Form 1"
+    student.form = entry_name if entry_name in ("SHS 1", "Form 1") else "SHS 1"
     student.track = Track.SHS
     student.stream = stream_val
     student.academic_year = year.label
@@ -423,7 +424,7 @@ async def enroll_student_in_shs(
         log_staff_activity(
             db, staff,
             page_label="Students",
-            action_label=f"Enrolled {student.full_name} into SHS Form 1",
+            action_label=f"Enrolled {student.full_name} into SHS 1",
             details=f"year={year.label}, stream={stream_val or 'N/A'}"
         )
     except Exception:

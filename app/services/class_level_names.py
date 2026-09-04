@@ -1,21 +1,27 @@
-"""Canonical class level names for Ghana PTA (KG → Primary → JHS → SHS Form)."""
+"""Canonical class level names for Ghana PTA (KG 1–2 → Primary → JHS → SHS)."""
 
 import re
 
 from sqlalchemy.orm import Session
 
-from app.models.class_level import ClassLevel
+from app.models.class_level import ClassLevel, Track
 
 JHS_NUMBERED = re.compile(r"^JHS [123]$")
-FORM_NUMBERED = re.compile(r"^Form [123]$")
+SHS_NUMBERED = re.compile(r"^SHS [123]$")
 
-STUDENT_FORM_ALIASES = {
-    "kg 1": "KG",
-    "kg 2": "KG",
-    "kg1": "KG",
-    "kg2": "KG",
-    "kindergarten": "KG",
-}
+
+def infer_track_from_name(normalized_name: str) -> Track:
+    if normalized_name.startswith("SHS "):
+        return Track.SHS
+    return Track.BASIC
+
+
+def display_class_level_name(raw: str) -> str:
+    """User-facing class label. Maps legacy Form 1–3 / KG to SHS / KG 1."""
+    try:
+        return normalize_class_level_name(raw)
+    except ValueError:
+        return " ".join((raw or "").strip().split())
 
 
 def normalize_class_level_name(raw: str) -> str:
@@ -25,10 +31,10 @@ def normalize_class_level_name(raw: str) -> str:
         raise ValueError("Level name is required")
 
     lower = name.lower()
-    if lower in STUDENT_FORM_ALIASES:
-        return STUDENT_FORM_ALIASES[lower]
-    if lower == "kg":
-        return "KG"
+    if lower in ("kg", "kindergarten", "kg 1", "kg1"):
+        return "KG 1"
+    if lower in ("kg 2", "kg2"):
+        return "KG 2"
 
     primary = re.match(r"^primary\s*(\d+)$", lower)
     if primary:
@@ -44,33 +50,28 @@ def normalize_class_level_name(raw: str) -> str:
             raise ValueError("JHS levels must be JHS 1, JHS 2, or JHS 3")
         return f"JHS {n}"
 
-    # SHS levels (Form 1–3); also accept "SHS 1" style input.
     form = re.match(r"^form\s*(\d+)$", lower)
     if form:
         n = int(form.group(1))
         if n < 1 or n > 3:
-            raise ValueError("SHS Form levels must be Form 1, Form 2, or Form 3")
-        return f"Form {n}"
+            raise ValueError("SHS levels must be SHS 1, SHS 2, or SHS 3")
+        return f"SHS {n}"
 
     shs = re.match(r"^shs\s*(\d+)$", lower)
     if shs:
         n = int(shs.group(1))
         if n < 1 or n > 3:
-            raise ValueError("SHS levels must be SHS 1, SHS 2, or SHS 3 (maps to Form 1–3)")
-        return f"Form {n}"
+            raise ValueError("SHS levels must be SHS 1, SHS 2, or SHS 3")
+        return f"SHS {n}"
 
     raise ValueError(
-        "Use KG, Primary 1–6, JHS 1–3, or Form 1–3 "
-        "(e.g. jhs 1, form 2, primary 3, kg)"
+        "Use KG 1, KG 2, Primary 1–6, JHS 1–3, or SHS 1–3 "
+        "(e.g. kg 1, jhs 1, shs 2, primary 3)"
     )
 
 
 def normalize_student_form_name(form: str) -> str:
     """Normalize a student class field before lookup."""
-    name = " ".join(form.strip().split())
-    lower = name.lower()
-    if lower in STUDENT_FORM_ALIASES:
-        return STUDENT_FORM_ALIASES[lower]
     return normalize_class_level_name(form)
 
 

@@ -9,33 +9,26 @@ from app.models.announcement import Announcement, AnnouncementType
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.academic import AcademicYear, AcademicTerm, TermStatus
 from app.models.class_level import ClassLevel, Track
+from app.services.school_options import SHS_PROGRAMMES
 
 ACADEMIC_YEAR = "2024/2025"
 
-# PTA ladder: KG → Primary → JHS → SHS Form (programme required for Form levels).
+# PTA ladder: KG 1–2 → Primary → JHS → SHS (programme required for SHS levels).
 DEFAULT_CLASS_LEVELS = [
-    {"name": "KG", "sequence": 1, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 1", "sequence": 2, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 2", "sequence": 3, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 3", "sequence": 4, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 4", "sequence": 5, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 5", "sequence": 6, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "Primary 6", "sequence": 7, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 1", "sequence": 8, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 2", "sequence": 9, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
-    {"name": "JHS 3", "sequence": 10, "track": "BASIC", "is_terminal": True, "requires_index_number": True, "requires_stream": False},
-    {"name": "Form 1", "sequence": 11, "track": "SHS", "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 2", "sequence": 12, "track": "SHS", "requires_index_number": True, "requires_stream": True},
-    {"name": "Form 3", "sequence": 13, "track": "SHS", "is_terminal": True, "requires_index_number": True, "requires_stream": True},
-]
-
-SHS_PROGRAMMES = [
-    "General Science",
-    "General Arts",
-    "Business",
-    "Visual Arts",
-    "Home Economics",
-    "Agricultural Science",
+    {"name": "KG 1", "sequence": 1, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "KG 2", "sequence": 2, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 1", "sequence": 3, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 2", "sequence": 4, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 3", "sequence": 5, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 4", "sequence": 6, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 5", "sequence": 7, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "Primary 6", "sequence": 8, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 1", "sequence": 9, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 2", "sequence": 10, "track": "BASIC", "requires_index_number": False, "requires_stream": False},
+    {"name": "JHS 3", "sequence": 11, "track": "BASIC", "is_terminal": True, "requires_index_number": True, "requires_stream": False},
+    {"name": "SHS 1", "sequence": 12, "track": "SHS", "requires_index_number": True, "requires_stream": True},
+    {"name": "SHS 2", "sequence": 13, "track": "SHS", "requires_index_number": True, "requires_stream": True},
+    {"name": "SHS 3", "sequence": 14, "track": "SHS", "is_terminal": True, "requires_index_number": True, "requires_stream": True},
 ]
 
 FIRST_NAMES_M = [
@@ -75,7 +68,7 @@ def build_students() -> list[dict]:
                 "index_number": None,
                 "full_name": "Ama Adjei",
                 "gender": "F",
-                "form": "KG",
+                "form": "KG 1",
                 "stream": None,
                 "parent_phone_1": "+233241234567",
             },
@@ -116,7 +109,7 @@ def build_students() -> list[dict]:
 
     # ── Extra lower-school students (10) ──
     lower_levels = [
-        "KG", "Primary 1", "Primary 2", "Primary 3", "Primary 4",
+        "KG 1", "KG 2", "Primary 1", "Primary 2", "Primary 3", "Primary 4",
         "Primary 5", "Primary 6", "JHS 1", "JHS 2", "JHS 3",
     ]
     for i, form in enumerate(lower_levels):
@@ -138,9 +131,9 @@ def build_students() -> list[dict]:
 
     # ── SHS Form students with programmes (~35 → total ≈ 50) ──
     shs_targets = (
-        [("Form 1", 12)]
-        + [("Form 2", 12)]
-        + [("Form 3", 11)]
+        [("SHS 1", 12)]
+        + [("SHS 2", 12)]
+        + [("SHS 3", 11)]
     )
     name_i = 0
     for form, count in shs_targets:
@@ -190,7 +183,7 @@ Scenario C — JHS 3 ward (10-digit BECE index):
   Ward class: JHS 3
   Index: 0111025099
 
-SHS wards use Form 1–3 and must include a programme
+SHS wards use SHS 1–3 and must include a programme
 (General Science, General Arts, Business, Visual Arts,
 Home Economics, or Agricultural Science).
 
@@ -251,7 +244,7 @@ def seed():
         if level_count:
             print(f"Class levels: created {level_count}")
         else:
-            print("Class levels: updated/seeded (incl. Form 1–3)")
+            print("Class levels: updated/seeded (incl. SHS 1–3)")
 
         student_count = 0
         for row in STUDENTS:
@@ -409,7 +402,7 @@ def seed():
         total_students = db.query(Student).count()
         shs_students = (
             db.query(Student)
-            .filter(Student.form.in_(["Form 1", "Form 2", "Form 3"]))
+            .filter(Student.form.in_(["SHS 1", "SHS 2", "SHS 3", "Form 1", "Form 2", "Form 3"]))
             .count()
         )
         with_programme = (
@@ -422,7 +415,7 @@ def seed():
         total_mtg = db.query(Meeting).count()
         print(
             f"\nTable counts — students: {total_students} "
-            f"(SHS/Form: {shs_students}, with programme: {with_programme}), "
+            f"(SHS: {shs_students}, with programme: {with_programme}), "
             f"dues: {total_dues}, announcements: {total_ann}, meetings: {total_mtg}"
         )
         print(MOBILE_TEST_GUIDE)
