@@ -23,6 +23,12 @@ def _phone_for_sms(raw: str | None, *, context: str) -> str | None:
         return None
 
 
+def occupied_student_ids(db: Session) -> set[str]:
+    """Student IDs already linked to any parent (active or pending unlink)."""
+    rows = db.query(ParentStudentLink.student_id).distinct().all()
+    return {str(row[0]) for row in rows if row[0]}
+
+
 def linked_students_for_parent(db: Session, parent_id: str) -> list[dict]:
     links = db.query(ParentStudentLink).filter(ParentStudentLink.parent_id == parent_id).all()
     students: list[dict] = []

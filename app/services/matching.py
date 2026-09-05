@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 from app.models.parent import Parent
 from app.models.parent_student_link import ParentStudentLink
 from app.models.student import Student
+from app.services.parent_directory import occupied_student_ids
 
 
 def _already_linked_student_ids(db: Session, parent_id: str) -> set[str]:
     links = db.query(ParentStudentLink).filter(ParentStudentLink.parent_id == parent_id).all()
-    return {link.student_id for link in links}
+    return {str(link.student_id) for link in links if link.student_id}
 
 
 def match_parent_to_student(
@@ -51,8 +52,8 @@ def find_matches(
     entered_index_number: str | None = None,
     entered_stream: str | None = None,
 ):
-    """Find ward candidates. Skips students already linked to this parent."""
-    linked_ids = _already_linked_student_ids(db, parent.id)
+    """Find ward candidates. Skips students already linked to any parent."""
+    linked_ids = occupied_student_ids(db) | _already_linked_student_ids(db, parent.id)
     candidates = []
     students = db.query(Student).filter(Student.is_active == True).all()
 

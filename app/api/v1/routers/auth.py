@@ -23,6 +23,7 @@ from app.services.staff_job_titles import display_job_title
 from app.models.student import Student
 from app.models.pending_match import PendingMatch
 from app.models.parent_student_link import ParentStudentLink
+from app.services.parent_directory import occupied_student_ids
 from app.models.class_level import ClassLevel
 from app.services.class_level_names import display_class_level_name
 from app.services.school_options import GENDERS, SHS_PROGRAMMES
@@ -110,6 +111,10 @@ async def search_students_for_registration(
     )
     if form and form.strip():
         query = query.filter(Student.form.ilike(form.strip()))
+
+    taken = occupied_student_ids(db)
+    if taken:
+        query = query.filter(~Student.id.in_(taken))
 
     rows = query.order_by(Student.full_name.asc()).limit(10).all()
     return {
